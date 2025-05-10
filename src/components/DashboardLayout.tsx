@@ -69,10 +69,11 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           defaultSize={20}
           minSize={5}
           maxSize={40}
-          collapsible
+          collapsible={true}
           collapsedSize={0}
-          collapsed={leftCollapsed}
-          className="relative"
+          onCollapse={() => setLeftCollapsed(true)}
+          onExpand={() => setLeftCollapsed(false)}
+          className="relative transition-all duration-300 ease-in-out"
         >
           <div className="h-full overflow-y-auto">
             {leftPanel}
@@ -82,7 +83,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               variant="outline"
               size="icon"
               onClick={toggleLeftPanel}
-              className="absolute top-4 -right-4 h-8 w-8 rounded-full border border-border z-10 bg-background"
+              className="absolute top-4 -right-4 h-8 w-8 rounded-full border border-border z-10 bg-background transition-transform hover:scale-105"
               aria-label="Expand left panel"
             >
               <ChevronRight className="h-4 w-4" />
@@ -93,7 +94,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               variant="outline"
               size="icon"
               onClick={toggleLeftPanel}
-              className="absolute top-4 -right-4 h-8 w-8 rounded-full border border-border z-10 bg-background"
+              className="absolute top-4 -right-4 h-8 w-8 rounded-full border border-border z-10 bg-background transition-transform hover:scale-105"
               aria-label="Collapse left panel"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -117,10 +118,11 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           defaultSize={20}
           minSize={5}
           maxSize={40}
-          collapsible
+          collapsible={true}
           collapsedSize={0}
-          collapsed={rightCollapsed}
-          className="relative"
+          onCollapse={() => setRightCollapsed(true)}
+          onExpand={() => setRightCollapsed(false)}
+          className="relative transition-all duration-300 ease-in-out"
         >
           <div className="h-full overflow-y-auto">
             {rightPanel}
@@ -130,7 +132,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               variant="outline"
               size="icon"
               onClick={toggleRightPanel}
-              className="absolute top-4 -left-4 h-8 w-8 rounded-full border border-border z-10 bg-background"
+              className="absolute top-4 -left-4 h-8 w-8 rounded-full border border-border z-10 bg-background transition-transform hover:scale-105"
               aria-label="Expand right panel"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -141,7 +143,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               variant="outline"
               size="icon"
               onClick={toggleRightPanel}
-              className="absolute top-4 -left-4 h-8 w-8 rounded-full border border-border z-10 bg-background"
+              className="absolute top-4 -left-4 h-8 w-8 rounded-full border border-border z-10 bg-background transition-transform hover:scale-105"
               aria-label="Collapse right panel"
             >
               <ChevronRight className="h-4 w-4" />
