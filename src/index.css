@@ -1,3 +1,4 @@
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -13,7 +14,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
 
-    --primary: 222.2 47.4% 11.2%;
+    --primary: 252 100% 64%;
     --primary-foreground: 210 40% 98%;
 
     --secondary: 210 40% 96.1%;
@@ -35,19 +36,12 @@
     --radius: 0.5rem;
 
     --sidebar-background: 0 0% 98%;
-
     --sidebar-foreground: 240 5.3% 26.1%;
-
     --sidebar-primary: 240 5.9% 10%;
-
     --sidebar-primary-foreground: 0 0% 98%;
-
     --sidebar-accent: 240 4.8% 95.9%;
-
     --sidebar-accent-foreground: 240 5.9% 10%;
-
     --sidebar-border: 220 13% 91%;
-
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
@@ -61,7 +55,7 @@
     --popover: 222.2 84% 4.9%;
     --popover-foreground: 210 40% 98%;
 
-    --primary: 210 40% 98%;
+    --primary: 252 100% 72%;
     --primary-foreground: 222.2 47.4% 11.2%;
 
     --secondary: 217.2 32.6% 17.5%;
@@ -97,5 +91,68 @@
 
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
   }
+}
+
+.panel-resize-handle {
+  background-color: hsl(var(--border));
+  transition: background-color 0.2s;
+}
+
+.panel-resize-handle:hover {
+  background-color: hsl(var(--primary) / 0.5);
+}
+
+.panel-resize-handle:active {
+  background-color: hsl(var(--primary));
+}
+
+.markdown h1 {
+  @apply text-3xl font-bold my-4;
+}
+
+.markdown h2 {
+  @apply text-2xl font-bold my-3;
+}
+
+.markdown h3 {
+  @apply text-xl font-bold my-2;
+}
+
+.markdown p {
+  @apply my-2;
+}
+
+.markdown ul {
+  @apply list-disc ml-6 my-2;
+}
+
+.markdown ol {
+  @apply list-decimal ml-6 my-2;
+}
+
+/* Fix for NavigationPanel's ChevronRight reference */
+@keyframes slideInDown {
+  from {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.highlighted-text {
+  @apply bg-primary/20 px-1 rounded;
 }
