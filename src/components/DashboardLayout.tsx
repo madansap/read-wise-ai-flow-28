@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   ResizablePanel, 
   ResizablePanelGroup, 
@@ -29,6 +29,23 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   const toggleRightPanel = () => {
     setRightCollapsed(!rightCollapsed);
   };
+
+  // Add keyboard shortcuts
+  useEffect(() => {
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key === '[') {
+        toggleLeftPanel();
+      } else if (event.key === ']') {
+        toggleRightPanel();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeydown);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeydown);
+    };
+  }, [leftCollapsed, rightCollapsed]);
 
   return (
     <div className="h-screen w-full flex flex-col overflow-hidden">
