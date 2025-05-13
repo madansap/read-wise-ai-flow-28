@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MessageSquare, Send, BookOpen, Zap, Lightbulb, Search, HelpCircle } from "lucide-react";
+import { MessageSquare, Send, BookOpen, Zap, Lightbulb, Search, HelpCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/components/ui/use-toast";
@@ -370,9 +370,17 @@ const AIAssistantPanel = () => {
           </TabsList>
         </div>
         
-        <TabsContent value="chat" className="flex-1 flex flex-col pt-2 overflow-hidden">
-          {/* Messages container */}
-          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+        <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden">
+          {/* Messages container with auto-scroll */}
+          <div 
+            className="flex-1 overflow-y-auto px-3 py-4 space-y-4"
+            ref={(el) => {
+              // Auto-scroll to bottom when new messages arrive
+              if (el && messages.length > 0) {
+                el.scrollTop = el.scrollHeight;
+              }
+            }}
+          >
             {messagesLoading ? (
               <div className="flex justify-center items-center h-20">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
@@ -390,7 +398,7 @@ const AIAssistantPanel = () => {
                 </p>
               </div>
             ) : (
-              messages.map((msg) => (
+              messages.map((msg, index) => (
                 <div
                   key={msg.id}
                   className={`flex ${
@@ -398,7 +406,7 @@ const AIAssistantPanel = () => {
                   }`}
                 >
                   <div
-                    className={`max-w-[80%] rounded-lg px-4 py-2 ${
+                    className={`max-w-[85%] md:max-w-[80%] rounded-lg px-4 py-2 ${
                       msg.role === "user"
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted"
@@ -417,10 +425,24 @@ const AIAssistantPanel = () => {
                 </div>
               ))
             )}
+            {sendMessageMutation.isPending && (
+              <div className="flex justify-start">
+                <div className="max-w-[85%] md:max-w-[80%] rounded-lg px-4 py-3 bg-muted">
+                  <div className="flex items-center space-x-2">
+                    <div className="animate-pulse flex space-x-1">
+                      <div className="h-2 w-2 bg-muted-foreground/60 rounded-full"></div>
+                      <div className="h-2 w-2 bg-muted-foreground/60 rounded-full animation-delay-200"></div>
+                      <div className="h-2 w-2 bg-muted-foreground/60 rounded-full animation-delay-400"></div>
+                    </div>
+                    <span className="text-sm text-muted-foreground">AI is thinking...</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           
           {/* Quick prompts */}
-          <div className="px-3 grid grid-cols-2 gap-2 my-2">
+          <div className="px-3 grid grid-cols-1 sm:grid-cols-2 gap-2 my-2">
             {QUICK_PROMPTS.map((prompt, index) => (
               <Button 
                 key={index} 
@@ -451,10 +473,12 @@ const AIAssistantPanel = () => {
                       : "Select a book to start"
                 }
                 disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
+                className="flex-1"
               />
               <Button 
                 onClick={handleSendMessage} 
                 disabled={!userInput.trim() || !currentPageText || isLoadingText || sendMessageMutation.isPending}
+                aria-label="Send message"
               >
                 {sendMessageMutation.isPending ? (
                   <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
@@ -471,7 +495,7 @@ const AIAssistantPanel = () => {
           </div>
         </TabsContent>
         
-        <TabsContent value="quiz" className="flex-1 flex flex-col pt-2 overflow-hidden">
+        <TabsContent value="quiz" className="flex-1 flex flex-col overflow-hidden">
           {!isGeneratingQuiz && quizQuestions.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center p-4">
               <Card className="w-full max-w-md mx-auto">
@@ -491,12 +515,26 @@ const AIAssistantPanel = () => {
                   </p>
                   <Button 
                     onClick={handleGenerateQuiz} 
-                    className="w-full" 
+                    className="w-full relative"
                     disabled={!currentPageText || isLoadingText}
                   >
-                    <Zap className="h-4 w-4 mr-2" />
-                    Generate Quiz
+                    {isGeneratingQuiz ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent mr-2" />
+                        <span>Generating...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4 mr-2" />
+                        Generate Quiz
+                      </>
+                    )}
                   </Button>
+                  {currentPage > 0 && currentBookTitle && (
+                    <div className="mt-4 text-xs text-muted-foreground text-center">
+                      Based on: {currentBookTitle}, Page {currentPage}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -505,17 +543,31 @@ const AIAssistantPanel = () => {
               <div className="text-center">
                 <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
                 <p>Generating quiz questions...</p>
+                <p className="text-sm text-muted-foreground mt-2">This may take a few moments</p>
               </div>
             </div>
           ) : (
             <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Quiz navigation */}
-              <div className="px-4 py-2 text-sm text-center">
-                Question {currentQuestionIndex + 1} of {quizQuestions.length}
+              {/* Quiz navigation and progress */}
+              <div className="px-4 py-3 border-b">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-medium">
+                    Question {currentQuestionIndex + 1} of {quizQuestions.length}
+                  </h3>
+                  <div className="text-sm text-muted-foreground">
+                    {quizQuestions.filter(q => q.userAnswer !== undefined).length} of {quizQuestions.length} answered
+                  </div>
+                </div>
+                <div className="w-full bg-muted h-2 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-primary h-full transition-all duration-300 ease-in-out" 
+                    style={{ width: `${(currentQuestionIndex / (quizQuestions.length - 1)) * 100}%` }}
+                  ></div>
+                </div>
               </div>
               
               {/* Current question */}
-              <div className="flex-1 overflow-y-auto px-4 pb-4">
+              <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2">
                 <Card className="mb-4">
                   <CardHeader>
                     <CardTitle className="text-lg">
@@ -541,15 +593,32 @@ const AIAssistantPanel = () => {
                             onClick={() => handleAnswerSelect(currentQuestionIndex, idx)}
                             disabled={quizQuestions[currentQuestionIndex]?.userAnswer !== undefined}
                           >
-                            <span className="mr-2">{String.fromCharCode(65 + idx)}.</span> {option}
+                            <div className="flex items-center">
+                              <div className={`flex-shrink-0 mr-3 w-6 h-6 rounded-full flex items-center justify-center ${
+                                showResult && isCorrectAnswer 
+                                  ? "bg-green-100 text-green-700 border border-green-500 dark:bg-green-900/40 dark:text-green-300" 
+                                  : isIncorrectSelection 
+                                    ? "bg-red-100 text-red-700 border border-red-500 dark:bg-red-900/40 dark:text-red-300"
+                                    : "border border-muted-foreground/30"
+                              }`}>
+                                {String.fromCharCode(65 + idx)}
+                              </div>
+                              <span>{option}</span>
+                            </div>
                           </Button>
                         );
                       })}
                     </div>
                     
-                    {/* Feedback section */}
+                    {/* Feedback section with improved styling */}
                     {quizQuestions[currentQuestionIndex]?.feedback && (
-                      <div className={`mt-4 p-3 rounded-md border ${quizQuestions[currentQuestionIndex]?.isCorrect ? 'border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-900' : 'border-red-200 bg-red-50 dark:bg-red-900/20 dark:border-red-900'}`}>
+                      <div 
+                        className={`mt-4 p-4 rounded-md border ${
+                          quizQuestions[currentQuestionIndex]?.isCorrect 
+                            ? 'border-green-200 bg-green-50 dark:bg-green-900/20 dark:border-green-900' 
+                            : 'border-red-200 bg-red-50 dark:bg-red-900/20 dark:border-red-900'
+                        }`}
+                      >
                         <div className="prose prose-sm dark:prose-invert max-w-none">
                           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
                             {quizQuestions[currentQuestionIndex]?.feedback}
@@ -561,26 +630,32 @@ const AIAssistantPanel = () => {
                 </Card>
               </div>
               
-              {/* Question navigation */}
-              <div className="px-4 pb-4 flex justify-between">
-                <Button
-                  variant="outline"
-                  onClick={handlePrevQuestion}
-                  disabled={currentQuestionIndex === 0}
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleNextQuestion}
-                  disabled={currentQuestionIndex === quizQuestions.length - 1}
-                >
-                  Next
-                </Button>
-              </div>
-              
-              {/* Generate new quiz button */}
-              <div className="px-4 pb-4">
+              {/* Question navigation and actions */}
+              <div className="px-4 py-3 border-t bg-background">
+                <div className="flex justify-between mb-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePrevQuestion}
+                    disabled={currentQuestionIndex === 0}
+                    className="w-24"
+                  >
+                    <ChevronLeft className="h-4 w-4 mr-1" />
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleNextQuestion}
+                    disabled={currentQuestionIndex === quizQuestions.length - 1}
+                    className="w-24"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4 ml-1" />
+                  </Button>
+                </div>
+
+                {/* Generate new quiz button */}
                 <Button 
                   variant="default" 
                   className="w-full"

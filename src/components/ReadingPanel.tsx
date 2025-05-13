@@ -137,9 +137,51 @@ const ReadingPanel = () => {
     setTotalPages(numPages);
   };
 
+  // Add observer to track visible pages
+  useEffect(() => {
+    if (!totalPages || !pdfUrl) return;
+
+    const observerOptions = {
+      root: document.querySelector('#pdf-container'),
+      rootMargin: '0px',
+      threshold: 0.5
+    };
+
+    const pageObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const pageId = entry.target.id;
+          const pageNum = parseInt(pageId.split('_')[1]);
+          
+          if (pageNum !== currentPage) {
+            setCurrentPage(pageNum);
+          }
+        }
+      });
+    }, observerOptions);
+
+    // Observe all page elements
+    for (let i = 1; i <= totalPages; i++) {
+      const pageElement = document.getElementById(`page_${i}`);
+      if (pageElement) {
+        pageObserver.observe(pageElement);
+      }
+    }
+
+    return () => {
+      pageObserver.disconnect();
+    };
+  }, [totalPages, pdfUrl, currentPage, setCurrentPage]);
+
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage);
+      
+      // Scroll to the selected page
+      const pageElement = document.getElementById(`page_${newPage}`);
+      if (pageElement) {
+        pageElement.scrollIntoView({ behavior: 'smooth' });
+      }
     }
   };
 
@@ -267,13 +309,34 @@ const ReadingPanel = () => {
                   <p className="text-red-500">Failed to load PDF. Please try again.</p>
                 </div>
               }
+              options={{
+                cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
+                cMapPacked: true,
+              }}
             >
-              <Page
-                pageNumber={currentPage}
-                renderTextLayer={true}
-                renderAnnotationLayer={true}
-                className={`border shadow-sm ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
-              />
+              {Array.from(new Array(totalPages), (_, index) => (
+                <div key={`page_${index + 1}`} className="mb-8">
+                  <div className="text-center text-sm text-muted-foreground mb-2">
+                    Page {index + 1} of {totalPages}
+                  </div>
+                  <Page
+                    key={`page_${index + 1}`}
+                    pageNumber={index + 1}
+                    renderTextLayer={true}
+                    renderAnnotationLayer={true}
+                    className={`border shadow-sm mx-auto ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
+                    onLoadSuccess={() => {
+                      if (index + 1 === currentPage) {
+                        // If this is the current page the user was on, scroll to it
+                        document.getElementById(`page_${currentPage}`)?.scrollIntoView({ behavior: 'smooth' });
+                      }
+                    }}
+                    width={Math.min(window.innerWidth * 0.9, 800)} // Responsive width
+                    height={null} // Allow natural height
+                    id={`page_${index + 1}`}
+                  />
+                </div>
+              ))}
             </Document>
           </div>
         ) : (
