@@ -14,10 +14,14 @@ serve(async (req) => {
   }
 
   try {
-    const { bookContent, userQuestion, conversationId, user } = await req.json();
+    const { bookContent, userQuestion, conversationId, user, quizMode } = await req.json();
 
-    if (!bookContent || !userQuestion) {
-      throw new Error("Book content and question are required");
+    if (!bookContent && !quizMode) {
+      throw new Error("Book content is required");
+    }
+
+    if (!userQuestion && !quizMode) {
+      throw new Error("Question is required");
     }
 
     // Configure OpenAI
@@ -31,12 +35,40 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Generate system prompt
-    const systemPrompt = `You are a helpful AI reading assistant. Your task is to answer questions about the text provided.
-    Base your answers only on the provided text and your general knowledge about books and reading.
-    If the answer cannot be found in the text, politely say so. Be concise but thorough in your explanations.
-    Format your answers using markdown for better readability.`;
+    // Generate appropriate system prompt based on mode
+    let systemPrompt;
+    let userPrompt;
+    
+    if (quizMode) {
+      systemPrompt = `You are an educational AI designed to create quiz questions about reading material.
+      Create engaging multiple-choice questions that test understanding of the provided text.
+      For each question, provide 4 answer options with exactly one correct answer.
+      Format your response as valid JSON that can be parsed with JSON.parse().
+      
+      The response should be an array of objects with the following structure:
+      [
+        {
+          "question": "The question text goes here?",
+          "options": ["Option A", "Option B", "Option C", "Option D"],
+          "correctIndex": 2  // Index of the correct option (0-3)
+        },
+        ...more questions
+      ]
+      
+      Generate ${quizMode === 'short' ? '3' : '5'} questions that are challenging but fair.`;
+      
+      userPrompt = `Here is the text content from the book to generate quiz questions about:\n\n${bookContent}`;
+    } else {
+      systemPrompt = `You are a helpful AI reading assistant. Your task is to answer questions about the text provided.
+      Base your answers only on the provided text and your general knowledge about books and reading.
+      If the answer cannot be found in the text, politely say so. Be concise but thorough in your explanations.
+      Format your answers using markdown for better readability.`;
+      
+      userPrompt = `Here is the text content from the book:\n\n${bookContent}\n\nQuestion: ${userQuestion}`;
+    }
 
+    console.log("Calling OpenAI API...");
+    
     // Call OpenAI API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -45,12 +77,12 @@ serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemPrompt },
-          { role: "user", content: `Here is the text content from the book:\n\n${bookContent}\n\nQuestion: ${userQuestion}` }
+          { role: "user", content: userPrompt }
         ],
-        temperature: 0.7,
+        temperature: quizMode ? 0.7 : 0.3,
       }),
     });
 
@@ -61,10 +93,11 @@ serve(async (req) => {
     }
 
     const data = await response.json();
+    console.log("OpenAI API response received");
     const aiResponse = data.choices[0].message.content;
 
-    // If conversationId is provided, save the interaction to the database
-    if (conversationId && user) {
+    // If conversationId is provided and not in quiz mode, save the interaction to the database
+    if (conversationId && user && !quizMode) {
       // Save user message
       await supabase.from("ai_messages").insert({
         conversation_id: conversationId,
