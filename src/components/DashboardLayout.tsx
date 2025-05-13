@@ -86,9 +86,9 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           defaultSize={20}
           minSize={5}
           maxSize={40}
-          collapsible
-          collapsedSize={0}
-          collapsed={leftCollapsed}
+          collapsible={true}
+          onCollapse={() => setLeftCollapsed(true)}
+          onExpand={() => setLeftCollapsed(false)}
           className="relative"
         >
           <div className="h-full overflow-y-auto">
@@ -134,9 +134,9 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           defaultSize={20}
           minSize={5}
           maxSize={40}
-          collapsible
-          collapsedSize={0}
-          collapsed={rightCollapsed}
+          collapsible={true}
+          onCollapse={() => setRightCollapsed(true)}
+          onExpand={() => setRightCollapsed(false)}
           className="relative"
         >
           <div className="h-full overflow-y-auto">
