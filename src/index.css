@@ -535,13 +535,60 @@
   backface-visibility: hidden;
 }
 
-/* Prevent white flash */
+/* Selection toolbar styling */
 .selection-toolbar {
   animation: fadeIn 150ms ease-in;
   will-change: transform, opacity;
+  pointer-events: auto;
+  user-select: none;
 }
 
 /* Ensure text content is selectable */
 .react-pdf__Page__textContent {
   pointer-events: auto !important;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+}
+
+/* Ensure the toolbar appears above the PDF */
+.react-pdf__Page {
+  position: relative;
+  z-index: 1;
+}
+
+.selection-toolbar {
+  z-index: 9999;
+}
+
+/* Selection highlight */
+::selection {
+  background-color: rgba(59, 130, 246, 0.2);
+}
+
+/* Dark mode selection */
+.dark ::selection {
+  background-color: rgba(59, 130, 246, 0.3);
+}
+
+/* Prevent toolbar from being hidden by PDF layers */
+.react-pdf__Page__annotations,
+.react-pdf__Page__textContent {
+  z-index: 1;
+}
+
+/* Ensure toolbar is always visible */
+.selection-toolbar {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  margin-top: -8px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }

@@ -41,11 +41,35 @@ const ReadingPanel = () => {
 
   // Reference to the container for additional event listeners
   const containerRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticScroll = useRef(false); // NEW: Track programmatic scrolls
   
   // Set up text selection event handler (do not block default behavior)
   const onMouseUp = useCallback((e: React.MouseEvent) => {
-    handleTextSelection(e.nativeEvent);
+    // Add a small delay to ensure the selection is complete
+    setTimeout(() => {
+      handleTextSelection(e.nativeEvent);
+    }, 0);
   }, [handleTextSelection]);
+
+  // Add click handler to clear selection when clicking outside
+  const onContainerClick = useCallback((e: React.MouseEvent) => {
+    if (e.target === containerRef.current) {
+      clearSelection();
+    }
+  }, [clearSelection]);
+
+  // Add event listeners for selection
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Add click handler to container
+    container.addEventListener('click', onContainerClick as any);
+
+    return () => {
+      container.removeEventListener('click', onContainerClick as any);
+    };
+  }, [onContainerClick]);
 
   // Load the current book from localStorage or fetch from database
   useEffect(() => {
@@ -180,7 +204,8 @@ const ReadingPanel = () => {
         if (entry.isIntersecting) {
           const pageId = entry.target.id;
           const pageNum = parseInt(pageId.split('_')[1]);
-          if (pageNum !== currentPage) {
+          // Only update if not programmatic scroll
+          if (!isProgrammaticScroll.current && pageNum !== currentPage) {
             setCurrentPage(pageNum);
           }
         }
@@ -200,15 +225,34 @@ const ReadingPanel = () => {
     };
   }, [totalPages, pdfUrl, currentPage, setCurrentPage, isSelectionToolbarVisible]);
 
+  // Scroll to the selected page
+  const scrollToPage = (pageNum: number) => {
+    const pageElement = document.getElementById(`page_${pageNum}`);
+    if (pageElement) {
+      isProgrammaticScroll.current = true;
+      pageElement.scrollIntoView({ behavior: 'smooth' });
+      setTimeout(() => {
+        isProgrammaticScroll.current = false;
+      }, 700); // Allow time for scroll to finish
+    }
+  };
+
+  // On initial load, scroll to last viewed page
+  useEffect(() => {
+    if (pdfUrl && currentPage > 0) {
+      // Wait for a short time to ensure pages are rendered
+      setTimeout(() => {
+        scrollToPage(currentPage);
+      }, 500);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfUrl]);
+
+  // Update handlePageChange to use scrollToPage
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
       setCurrentPage(newPage);
-      
-      // Scroll to the selected page
-      const pageElement = document.getElementById(`page_${newPage}`);
-      if (pageElement) {
-        pageElement.scrollIntoView({ behavior: 'smooth' });
-      }
+      scrollToPage(newPage);
     }
   };
 
@@ -259,32 +303,10 @@ const ReadingPanel = () => {
       {/* Top controls */}
       <div className="p-3 border-b flex items-center justify-between">
         <div className="flex items-center space-x-2">
-          {/* Page navigation */}
-          <div className="flex items-center space-x-1">
-            <Button 
-              variant="outline" 
-              size="icon" 
-              disabled={currentPage <= 1 || isLoadingText}
-              onClick={() => handlePageChange(currentPage - 1)}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-            <span className="text-sm">
-              Page {currentPage} of {totalPages || '?'}
-            </span>
-            <Button 
-              variant="outline" 
-              size="icon" 
-              disabled={totalPages === 0 || currentPage >= totalPages || isLoadingText}
-              onClick={() => handlePageChange(currentPage + 1)}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-          
+          {/* Page navigation - removed */}
           {/* Show current book title */}
           {currentBookTitle && (
-            <span className="ml-4 text-sm font-medium truncate max-w-[200px]">
+            <span className="ml-0 text-sm font-medium truncate max-w-[200px]">
               {currentBookTitle}
             </span>
           )}
@@ -321,8 +343,8 @@ const ReadingPanel = () => {
 
       {/* Reading area */}
       <div 
-        className={`flex-1 overflow-auto p-4 ${themeClasses[theme]}`}
         ref={containerRef}
+        className={`flex-1 overflow-auto p-4 ${themeClasses[theme]}`}
       >
         {selectedBook && pdfUrl ? (
           <div id="pdf-container" className="flex justify-center">

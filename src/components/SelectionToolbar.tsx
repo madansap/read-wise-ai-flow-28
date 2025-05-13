@@ -71,7 +71,11 @@ const SelectionToolbar = () => {
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: selectedText,
-          mode: "explainSelection"
+          mode: "explainSelection",
+          user: user,
+          bookId: currentBookId,
+          pageNumber: currentPage,
+          selectedText: selectedText
         }
       });
       
@@ -79,12 +83,16 @@ const SelectionToolbar = () => {
         throw new Error(response.error.message);
       }
       
+      if (!response.data || !response.data.response) {
+        throw new Error("No response from AI assistant");
+      }
+      
       setExplanation(response.data.response);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error explaining selection:', error);
       toast({
         title: "Error explaining selection",
-        description: "Could not get explanation. Please try again.",
+        description: error.message || "Could not get explanation. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -115,20 +123,46 @@ const SelectionToolbar = () => {
     setIsSavingNote(true);
     
     try {
-      // Create new note record directly
-      const { error } = await supabase
-        .from('notes')
+      // First create a conversation if it doesn't exist
+      const { data: conversation, error: convError } = await supabase
+        .from('ai_conversations')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('book_id', currentBookId)
+        .single();
+
+      if (convError && convError.code !== 'PGRST116') { // PGRST116 is "no rows returned"
+        throw convError;
+      }
+
+      let conversationId = conversation?.id;
+      
+      if (!conversationId) {
+        // Create new conversation
+        const { data: newConv, error: createError } = await supabase
+          .from('ai_conversations')
+          .insert({
+            user_id: user.id,
+            book_id: currentBookId,
+            title: noteTitle
+          })
+          .select('id')
+          .single();
+
+        if (createError) throw createError;
+        conversationId = newConv.id;
+      }
+
+      // Create the note as an AI message
+      const { error: msgError } = await supabase
+        .from('ai_messages')
         .insert({
-          user_id: user.id,
-          book_id: currentBookId,
-          page_number: currentPage,
-          selected_text: selectedText,
-          title: noteTitle,
-          content: noteContent,
-          color: selectedColor
+          conversation_id: conversationId,
+          role: 'user',
+          content: `${noteTitle}\n\n${noteContent}\n\nSelected text: ${selectedText}`
         });
         
-      if (error) throw error;
+      if (msgError) throw msgError;
       
       toast({
         title: "Note saved",

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
@@ -76,22 +75,54 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       if (uploadError) throw uploadError;
 
       // Step 2: Save book metadata to the books table
-      const { error: insertError } = await supabase
+      const { data: bookData, error: insertError } = await supabase
         .from('books')
         .insert({
           title: metadata.title,
           author: metadata.author || null,
           file_path: filePath,
           file_type: file.type,
-          user_id: user.id
-        });
+          user_id: user.id,
+          is_processed: false,
+          processing_status: 'Queued for processing'
+        })
+        .select('id')
+        .single();
 
       if (insertError) throw insertError;
-
+      
+      // Step 3: Trigger the PDF processing function
       toast({
         title: "Book uploaded",
-        description: "Your book has been uploaded successfully",
+        description: "Your book is being processed. This may take a few minutes.",
       });
+      
+      try {
+        const { error: processingError } = await supabase.functions.invoke('ai-assistant', {
+          body: {
+            book_id: bookData.id,
+            user_id: user.id,
+            file_path: filePath
+          }
+        });
+        
+        if (processingError) {
+          console.error("Error triggering PDF processing:", processingError);
+          // Don't throw here, as the book was already uploaded successfully
+          toast({
+            title: "Processing started with warnings",
+            description: "Your book was uploaded but processing may be delayed.",
+            variant: "destructive",
+          });
+        }
+      } catch (processingError: any) {
+        console.error("Error in PDF processing:", processingError);
+        toast({
+          title: "PDF processing issue",
+          description: "Your book was uploaded but text extraction may be delayed.",
+          variant: "destructive",
+        });
+      }
       
       if (onUploadSuccess) onUploadSuccess();
       

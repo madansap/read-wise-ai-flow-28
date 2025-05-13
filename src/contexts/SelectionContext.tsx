@@ -64,10 +64,27 @@ export const SelectionProvider: React.FC<{ children: ReactNode }> = ({ children 
       const range = selection.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       
+      // Check if the selection is within a PDF page
+      const pdfPage = (event.target as HTMLElement).closest('.react-pdf__Page');
+      if (!pdfPage) {
+        clearSelection();
+        setIsSelecting(false);
+        return;
+      }
+      
+      // Get the page number from the data attribute
+      const pageNumber = parseInt(pdfPage.getAttribute('data-page-number') || '0');
+      setPageNumber(pageNumber);
+      
+      // Calculate position relative to the viewport
+      const viewportRect = pdfPage.getBoundingClientRect();
+      const relativeX = rect.left + rect.width / 2 - viewportRect.left;
+      const relativeY = rect.top - viewportRect.top;
+      
       // Set the selection position
       setSelectionPosition({
-        x: rect.left + rect.width / 2,
-        y: rect.top,
+        x: relativeX,
+        y: relativeY,
         width: rect.width,
         height: rect.height
       });

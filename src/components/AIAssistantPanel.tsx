@@ -129,8 +129,8 @@ const AIAssistantPanel = () => {
   // Send message mutation
   const sendMessageMutation = useMutation({
     mutationFn: async (content: string) => {
-      if (!user || !currentConversationId || !currentPageText) {
-        throw new Error("Missing required data");
+      if (!user || !currentConversationId || !currentPageText || isLoadingText) {
+        throw new Error("Missing required data or page is still loading");
       }
       
       // First, add the user message to the database
@@ -146,14 +146,16 @@ const AIAssistantPanel = () => {
       
       if (userMsgError) throw userMsgError;
       
-      // Call the AI assistant edge function with updated parameters
+      // Call the AI assistant edge function with updated parameters including book_id and page context
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
-          bookContent: currentPageText,
+          bookContent: currentPageText, // We'll still send this for backward compatibility
           userQuestion: content,
           conversationId: currentConversationId,
           user: user,
-          mode: "chat"  // Explicitly set mode to "chat"
+          mode: "chat",
+          bookId: currentBookId, // Send book ID for RAG
+          pageNumber: currentPage // Send current page for context
         }
       });
       
@@ -164,10 +166,11 @@ const AIAssistantPanel = () => {
       // Return all needed data
       return { 
         userMessage: { id: userMessageId, role: 'user' as const, content },
-        aiResponse: response.data.response
+        aiResponse: response.data.response,
+        contextUsed: response.data.context_used // Flag if RAG context was used
       };
     },
-    onSuccess: ({ userMessage, aiResponse }) => {
+    onSuccess: ({ userMessage, aiResponse, contextUsed }) => {
       // Update the messages in the UI immediately
       queryClient.setQueryData(['messages', currentConversationId], 
         (old: Message[] = []) => [...old, 
@@ -175,6 +178,15 @@ const AIAssistantPanel = () => {
           { id: uuidv4(), role: 'assistant', content: aiResponse }
         ]
       );
+      
+      // Optionally show toast when RAG was used
+      if (contextUsed) {
+        toast({
+          title: "Enhanced Context Used",
+          description: "AI used broader book context to improve the answer.",
+          variant: "default",
+        });
+      }
       
       // Clear the input field
       setUserInput("");
@@ -191,18 +203,20 @@ const AIAssistantPanel = () => {
   // Generate quiz mutation
   const generateQuizMutation = useMutation({
     mutationFn: async () => {
-      if (!currentPageText) {
-        throw new Error("No book content available");
+      if (!currentPageText || isLoadingText) {
+        throw new Error("No book content available or page is still loading");
       }
       
       setIsGeneratingQuiz(true);
       
-      // Call AI assistant with quiz mode
+      // Call AI assistant with quiz mode, including book_id for RAG context
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: currentPageText,
           mode: "quiz",
-          numQuestions: 3 // Request 3 questions
+          numQuestions: 3,
+          bookId: currentBookId, // Send book ID for RAG
+          pageNumber: currentPage // Send current page for context
         }
       });
       
@@ -260,7 +274,9 @@ const AIAssistantPanel = () => {
             options: question.options,
             correctIndex: question.correctIndex,
             userAnswerIndex: optionIndex
-          }
+          },
+          bookId: currentBookId, // Send book ID for additional context
+          pageNumber: currentPage // Send current page for context
         }
       });
       
@@ -297,8 +313,7 @@ const AIAssistantPanel = () => {
 
   const handleSendMessage = () => {
     if (!userInput.trim()) return;
-    
-    if (!currentPageText) {
+    if (!currentPageText || isLoadingText) {
       toast({
         title: "No book content",
         description: "Please wait for the page content to load or select a book.",
@@ -306,7 +321,6 @@ const AIAssistantPanel = () => {
       });
       return;
     }
-    
     sendMessageMutation.mutate(userInput);
   };
 
@@ -350,7 +364,14 @@ const AIAssistantPanel = () => {
   };
 
   const handleQuickPrompt = (prompt: string) => {
+    // Check if we can send
+    if (!currentPageText || isLoadingText || sendMessageMutation.isPending) {
+      return;
+    }
+    
+    // Set the prompt and immediately send it rather than just updating the input field
     setUserInput(prompt);
+    sendMessageMutation.mutate(prompt);
   };
 
   // Scroll to bottom whenever messages change
@@ -498,6 +519,9 @@ const AIAssistantPanel = () => {
               {currentPage > 0 && currentBookTitle && (
                 <div className="mt-2 text-xs text-muted-foreground">
                   Answering based on: {currentBookTitle}, Page {currentPage}
+                  {currentBookId && !isLoadingText && (
+                    <span className="ml-1 text-primary text-xs">• AI has full book context</span>
+                  )}
                 </div>
               )}
             </div>
