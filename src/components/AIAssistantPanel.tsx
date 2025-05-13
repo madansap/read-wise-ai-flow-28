@@ -378,9 +378,9 @@ const AIAssistantPanel = () => {
           </TabsList>
         </div>
         
-        <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden">
-          {/* Messages container with auto-scroll */}
-          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+        <TabsContent value="chat" className="flex-1 flex flex-col h-full">
+          {/* Messages area - flex-grow to fill available space */}
+          <div className="flex-grow overflow-y-auto px-3 pt-4 pb-2">
             {messagesLoading ? (
               <div className="flex justify-center items-center h-20">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
@@ -398,64 +398,65 @@ const AIAssistantPanel = () => {
                 </p>
               </div>
             ) : (
-              messages.map((msg, index) => (
-                <div
-                  key={msg.id}
-                  className={`flex ${
-                    msg.role === "user" ? "justify-end" : "justify-start"
-                  }`}
-                >
+              <div className="space-y-4">
+                {messages.map((msg, index) => (
                   <div
-                    className={`max-w-[85%] md:max-w-[80%] rounded-lg px-4 py-2 ${
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
+                    key={msg.id}
+                    className={`flex ${
+                      msg.role === "user" ? "justify-end" : "justify-start"
                     }`}
                   >
-                    {msg.role === "assistant" ? (
-                      <div className="prose prose-sm dark:prose-invert max-w-none">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                          {msg.content}
-                        </ReactMarkdown>
-                      </div>
-                    ) : (
-                      <p>{msg.content}</p>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-            {sendMessageMutation.isPending && (
-              <div className="flex justify-start">
-                <div className="max-w-[85%] md:max-w-[80%] rounded-lg px-4 py-3 bg-muted">
-                  <div className="flex items-center space-x-2">
-                    <div className="animate-pulse flex space-x-1">
-                      <div className="h-2 w-2 bg-muted-foreground/60 rounded-full"></div>
-                      <div className="h-2 w-2 bg-muted-foreground/60 rounded-full animation-delay-200"></div>
-                      <div className="h-2 w-2 bg-muted-foreground/60 rounded-full animation-delay-400"></div>
+                    <div
+                      className={`max-w-[85%] md:max-w-[80%] rounded-lg px-4 py-2 ${
+                        msg.role === "user"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted"
+                      }`}
+                    >
+                      {msg.role === "assistant" ? (
+                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                            {msg.content}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <p>{msg.content}</p>
+                      )}
                     </div>
-                    <span className="text-sm text-muted-foreground">AI is thinking...</span>
                   </div>
-                </div>
+                ))}
+
+                {sendMessageMutation.isPending && (
+                  <div className="flex justify-start mt-4">
+                    <div className="max-w-[85%] md:max-w-[80%] rounded-lg px-4 py-3 bg-muted">
+                      <div className="flex items-center space-x-2">
+                        <div className="animate-pulse flex space-x-1">
+                          <div className="h-2 w-2 bg-muted-foreground/60 rounded-full"></div>
+                          <div className="h-2 w-2 bg-muted-foreground/60 rounded-full animation-delay-200"></div>
+                          <div className="h-2 w-2 bg-muted-foreground/60 rounded-full animation-delay-400"></div>
+                        </div>
+                        <span className="text-sm text-muted-foreground">AI is thinking...</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Invisible element to scroll to */}
+                <div ref={messagesEndRef} />
               </div>
             )}
-            {/* Invisible element to scroll to */}
-            <div ref={messagesEndRef} />
-            
-            {/* Add extra space at the bottom to prevent content being hidden behind the input box */}
-            <div className="h-[170px] md:h-[120px]"></div>
           </div>
           
-          {/* Fixed bottom input area */}
-          <div className="fixed-chat-input">
+          {/* Input area - flex-shrink-0 to maintain height and not compress */}
+          <div className="flex-shrink-0 border-t bg-background">
             {/* Quick prompts */}
-            <div className="px-3 grid grid-cols-1 sm:grid-cols-2 gap-2 my-2">
+            <div className="px-3 grid grid-cols-2 gap-2 mt-2 mb-2">
               {QUICK_PROMPTS.map((prompt, index) => (
                 <Button 
                   key={index} 
                   variant="outline" 
                   size="sm"
-                  className="flex items-center justify-start overflow-hidden"
+                  className="flex items-center justify-start overflow-hidden text-xs"
                   onClick={() => handleQuickPrompt(prompt.text)}
                   disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
                 >

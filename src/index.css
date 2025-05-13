@@ -306,15 +306,91 @@
 }
 
 @layer components {
-  /* Fixed chat input styling */
-  .fixed-chat-input {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background-color: hsl(var(--background));
-    border-top: 1px solid hsl(var(--border));
-    box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.05);
-    z-index: 20;
+  /* Chat layout styling */
+  .flex-grow {
+    flex-grow: 1;
+    min-height: 0; /* Important for scrolling to work in a flex container */
+  }
+  
+  .flex-shrink-0 {
+    flex-shrink: 0;
+  }
+  
+  /* Ensure scroll behavior is smooth */
+  .overflow-y-auto {
+    scroll-behavior: smooth;
+  }
+  
+  /* Ensure h-full works properly in flex containers */
+  .h-full {
+    height: 100% !important;
+  }
+}
+
+/* Improved scrollbar styling */
+.overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 8px;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* Chat message animations */
+.space-y-4 > div {
+  animation: fadeInMessage 0.3s ease forwards;
+  opacity: 0;
+}
+
+@keyframes fadeInMessage {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Add delay for consecutive messages */
+.space-y-4 > div:nth-child(1) { animation-delay: 0.05s; }
+.space-y-4 > div:nth-child(2) { animation-delay: 0.1s; }
+.space-y-4 > div:nth-child(3) { animation-delay: 0.15s; }
+.space-y-4 > div:nth-child(4) { animation-delay: 0.2s; }
+.space-y-4 > div:nth-child(5) { animation-delay: 0.25s; }
+
+/* Message bubble hover effect */
+.max-w-\[85\%\].rounded-lg {
+  transition: transform 0.2s ease;
+}
+
+.max-w-\[85\%\].rounded-lg:hover {
+  transform: translateY(-1px);
+}
+
+/* Thinking animation enhancements */
+.animate-pulse .h-2.w-2 {
+  animation: pulse 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
   }
 }
