@@ -1,15 +1,21 @@
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MessageSquare, Send, BookOpen, Zap } from "lucide-react";
-import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/components/ui/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { v4 as uuidv4 } from 'uuid';
+import { pdfjs } from 'react-pdf';
+
+// Configure worker for PDF.js if not already configured
+if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+  pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+}
 
 type Message = {
   id: string;
@@ -34,55 +40,168 @@ const AIAssistantPanel = () => {
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [currentBookId, setCurrentBookId] = useState<string | null>(null);
+  const [pageText, setPageText] = useState<string>("");
+
+  // Get current book and page text
+  useEffect(() => {
+    const bookId = localStorage.getItem('currentBookId');
+    if (bookId) {
+      setCurrentBookId(bookId);
+    }
+
+    // Create or get conversation ID
+    const getOrCreateConversation = async () => {
+      if (!user || !bookId) return;
+
+      try {
+        // Check for existing conversation
+        const { data: existingConvs, error: fetchError } = await supabase
+          .from('ai_conversations')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('book_id', bookId)
+          .limit(1);
+
+        if (fetchError) throw fetchError;
+
+        if (existingConvs && existingConvs.length > 0) {
+          setCurrentConversationId(existingConvs[0].id);
+        } else {
+          // Create new conversation
+          const { data, error: insertError } = await supabase
+            .from('ai_conversations')
+            .insert({
+              user_id: user.id,
+              book_id: bookId,
+              title: 'Reading Session'
+            })
+            .select('id')
+            .single();
+
+          if (insertError) throw insertError;
+          
+          if (data) {
+            setCurrentConversationId(data.id);
+          }
+        }
+      } catch (error) {
+        console.error("Error with conversation:", error);
+      }
+    };
+
+    getOrCreateConversation();
+  }, [user]);
+
+  // Extract text from current PDF page
+  useEffect(() => {
+    const extractPageText = async () => {
+      if (!currentBookId) return;
+      
+      try {
+        // Get book data
+        const { data: bookData, error: bookError } = await supabase
+          .from('books')
+          .select('file_path, last_read_position')
+          .eq('id', currentBookId)
+          .single();
+          
+        if (bookError) throw bookError;
+        
+        // Get signed URL for the PDF
+        const { data: urlData, error: urlError } = await supabase
+          .storage
+          .from('books')
+          .createSignedUrl(bookData.file_path, 3600);
+          
+        if (urlError) throw urlError;
+        
+        const currentPage = parseInt(bookData.last_read_position) || 1;
+        
+        // Load PDF and extract text
+        const pdf = await pdfjs.getDocument(urlData.signedUrl).promise;
+        const page = await pdf.getPage(currentPage);
+        const textContent = await page.getTextContent();
+        const text = textContent.items.map((item: any) => item.str).join(' ');
+        
+        setPageText(text);
+      } catch (error) {
+        console.error("Error extracting page text:", error);
+      }
+    };
+    
+    extractPageText();
+  }, [currentBookId]);
 
   // Fetch messages for the current conversation
   const { data: messages = [], isLoading: messagesLoading } = useQuery({
-    queryKey: ['messages', 'current-conversation'],
+    queryKey: ['messages', currentConversationId],
     queryFn: async () => {
-      // In a real app, we'd get the current book ID and conversation ID
-      // For now, we'll use a mock conversation
-      return [
-        {
-          id: "1",
-          role: "assistant",
-          content: "Hello! I'm your reading assistant. Ask me anything about the book you're reading, and I'll help explain concepts or provide insights."
-        }
-      ] as Message[];
+      if (!currentConversationId) return [];
+      
+      const { data, error } = await supabase
+        .from('ai_messages')
+        .select('*')
+        .eq('conversation_id', currentConversationId)
+        .order('created_at', { ascending: true });
+      
+      if (error) throw error;
+      return data as Message[];
     },
-    enabled: !!user,
+    enabled: !!currentConversationId,
   });
 
   // Send message mutation
   const sendMessageMutation = useMutation({
     mutationFn: async (content: string) => {
-      if (!user) throw new Error("User not authenticated");
+      if (!user || !currentConversationId || !pageText) {
+        throw new Error("Missing required data");
+      }
       
-      // In a real implementation, we would:
-      // 1. Save the message to Supabase
-      // 2. Send the message to an AI service via Edge Function
-      // 3. Save the AI response
+      // First, add the user message to the database
+      const userMessageId = uuidv4();
+      const { error: userMsgError } = await supabase
+        .from('ai_messages')
+        .insert({
+          id: userMessageId,
+          conversation_id: currentConversationId,
+          role: 'user',
+          content
+        });
       
-      // Mock implementation for now
-      const userMessage: Message = {
-        id: Date.now().toString(),
-        role: "user",
-        content,
+      if (userMsgError) throw userMsgError;
+      
+      // Call the AI assistant edge function
+      const response = await supabase.functions.invoke('ai-assistant', {
+        body: {
+          bookContent: pageText,
+          userQuestion: content,
+          conversationId: currentConversationId,
+          user: user
+        }
+      });
+      
+      if (response.error) {
+        throw new Error(response.error.message || "Error from AI assistant");
+      }
+      
+      // Return all needed data
+      return { 
+        userMessage: { id: userMessageId, role: 'user' as const, content },
+        aiResponse: response.data.response
       };
-      
-      const aiResponse: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: simulateAIResponse(content),
-      };
-      
-      return { userMessage, aiResponse };
     },
     onSuccess: ({ userMessage, aiResponse }) => {
-      queryClient.setQueryData(['messages', 'current-conversation'], 
-        (old: Message[] = []) => [...old, userMessage, aiResponse]
+      // Update the messages in the UI immediately
+      queryClient.setQueryData(['messages', currentConversationId], 
+        (old: Message[] = []) => [...old, 
+          userMessage,
+          { id: uuidv4(), role: 'assistant', content: aiResponse }
+        ]
       );
     },
-    onError: (error) => {
+    onError: (error: any) => {
       toast({
         title: "Error sending message",
         description: error.message,
@@ -94,42 +213,49 @@ const AIAssistantPanel = () => {
   // Generate quiz mutation
   const generateQuizMutation = useMutation({
     mutationFn: async () => {
-      // In a real implementation, this would call an Edge Function that uses AI
+      if (!pageText) {
+        throw new Error("No book content available");
+      }
+      
       setIsGeneratingQuiz(true);
       
-      // Simulate delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Mock quiz questions
-      const mockQuiz: QuizQuestion[] = [
-        {
-          question: "What is the main metaphor James Clear uses to describe habits?",
-          options: ["Financial investment", "Compound interest", "Building blocks"],
-          correctIndex: 1,
-        },
-        {
-          question: "According to the author, why do small habits matter?",
-          options: [
-            "They lead to immediate results", 
-            "They compound over time", 
-            "They are easier to form than large habits"
-          ],
-          correctIndex: 1,
-        },
-        {
-          question: "What does James Clear suggest is more important than goals?",
-          options: ["Motivation", "Systems", "Willpower"],
-          correctIndex: 1,
+      // Call OpenAI via edge function to generate questions
+      const response = await supabase.functions.invoke('ai-assistant', {
+        body: {
+          bookContent: pageText,
+          userQuestion: "Generate 3 multiple-choice quiz questions about this content. Each question should have 4 options. Format your response as a JSON array with objects containing 'question', 'options' (array of 4 strings), and 'correctIndex' (0-3). Make it challenging but fair.",
+          conversationId: null
         }
-      ];
+      });
       
-      return mockQuiz;
+      if (response.error) {
+        throw new Error(response.error.message || "Error generating quiz");
+      }
+      
+      // Parse the quiz questions
+      try {
+        // The AI should return JSON, but it might be embedded in markdown or text
+        const responseText = response.data.response;
+        
+        // Extract JSON from response (might be in a code block)
+        const jsonMatch = responseText.match(/```json\n([\s\S]*?)\n```/) || 
+                          responseText.match(/```\n([\s\S]*?)\n```/) ||
+                          [null, responseText];
+        
+        const jsonText = jsonMatch[1] || responseText;
+        const questions = JSON.parse(jsonText);
+        
+        return questions as QuizQuestion[];
+      } catch (error) {
+        console.error("Error parsing quiz questions:", error);
+        throw new Error("Failed to parse quiz questions");
+      }
     },
     onSuccess: (data) => {
       setQuizQuestions(data);
       setQuizSubmitted(false);
     },
-    onError: (error) => {
+    onError: (error: any) => {
       toast({
         title: "Error generating quiz",
         description: error.message,
@@ -142,7 +268,7 @@ const AIAssistantPanel = () => {
   });
 
   const handleSendMessage = () => {
-    if (!userInput.trim()) return;
+    if (!userInput.trim() || !pageText) return;
     sendMessageMutation.mutate(userInput);
     setUserInput("");
   };
@@ -225,6 +351,16 @@ const AIAssistantPanel = () => {
               <div className="flex justify-center p-4">
                 <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-primary"></div>
               </div>
+            ) : messages.length === 0 ? (
+              <div className="text-center py-6">
+                <div className="mx-auto bg-muted rounded-full p-3 w-12 h-12 flex items-center justify-center">
+                  <MessageSquare className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <h3 className="mt-3 font-medium">AI Reading Assistant</h3>
+                <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-xs mx-auto">
+                  Ask questions about what you're reading, get explanations, or request summaries.
+                </p>
+              </div>
             ) : (
               messages.map((msg) => (
                 <div
@@ -250,37 +386,51 @@ const AIAssistantPanel = () => {
           <div className="p-4 border-t">
             <div className="flex gap-2">
               <Input
-                placeholder="Ask about the book..."
+                placeholder={currentBookId ? "Ask about the book..." : "Select a book to ask questions"}
                 value={userInput}
                 onChange={(e) => setUserInput(e.target.value)}
                 onKeyDown={handleKeyPress}
                 className="flex-1"
-                disabled={sendMessageMutation.isPending}
+                disabled={sendMessageMutation.isPending || !currentBookId}
               />
               <Button 
                 onClick={handleSendMessage} 
-                disabled={!userInput.trim() || sendMessageMutation.isPending}
+                disabled={!userInput.trim() || sendMessageMutation.isPending || !currentBookId || !pageText}
                 size="icon"
               >
                 <Send className="h-4 w-4" />
               </Button>
             </div>
             <div className="mt-2 flex gap-1 flex-wrap">
-              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setUserInput("What is an atomic habit?")}>
-                What is an atomic habit?
+              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setUserInput("Explain this page")}>
+                Explain this page
               </Button>
-              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setUserInput("Explain the concept of systems vs goals")}>
-                Systems vs goals
+              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setUserInput("Summarize key points")}>
+                Key points
               </Button>
-              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setUserInput("Summarize this chapter")}>
-                Summarize chapter
+              <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => setUserInput("Clarify difficult concepts")}>
+                Clarify concepts
               </Button>
             </div>
           </div>
         </TabsContent>
 
         <TabsContent value="quiz" className="flex-1 p-4 m-0 overflow-auto space-y-4">
-          {quizQuestions.length === 0 ? (
+          {!currentBookId ? (
+            <Card>
+              <CardContent className="pt-6 text-center space-y-4">
+                <div className="mx-auto bg-muted rounded-full p-3 w-12 h-12 flex items-center justify-center">
+                  <BookOpen className="h-6 w-6 text-muted-foreground" />
+                </div>
+                <div>
+                  <h2 className="font-medium text-lg mb-2">Select a Book</h2>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Please select a book from your library before generating quiz questions.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : quizQuestions.length === 0 ? (
             <Card>
               <CardContent className="pt-6 text-center space-y-4">
                 <div className="mx-auto bg-muted rounded-full p-3 w-12 h-12 flex items-center justify-center">
@@ -294,7 +444,7 @@ const AIAssistantPanel = () => {
                 </div>
                 <Button 
                   onClick={handleGenerateQuiz} 
-                  disabled={isGeneratingQuiz}
+                  disabled={isGeneratingQuiz || !pageText}
                   className="w-full"
                 >
                   {isGeneratingQuiz ? (
@@ -386,24 +536,5 @@ const AIAssistantPanel = () => {
     </div>
   );
 };
-
-// Simulate AI responses for demonstration
-function simulateAIResponse(userInput: string): string {
-  const input = userInput.toLowerCase();
-  
-  if (input.includes("atomic habit")) {
-    return "An atomic habit is a small, regular practice or routine that is both easy to do and tiny. James Clear uses this term to describe habits that are part of a larger system. The idea is that small changes, consistently applied, can lead to remarkable results over time.";
-  }
-  
-  if (input.includes("systems") && input.includes("goals")) {
-    return "In 'Atomic Habits', James Clear distinguishes between systems and goals. Goals are about the results you want to achieve, while systems are about the processes that lead to those results.\n\nClear argues that focusing on systems is more effective because:\n- Goals are temporary (once achieved, what's next?)\n- Systems are ongoing and build long-term progress\n- Goals restrict happiness until they're achieved, while systems allow satisfaction in the present\n\nHis famous quote is: 'You do not rise to the level of your goals. You fall to the level of your systems.'";
-  }
-  
-  if (input.includes("summarize")) {
-    return "Chapter 1 explores the power of tiny changes and how they compound over time. Clear introduces the concept of 'atomic habits' - small improvements that yield massive results when consistently applied. He argues that habits are the compound interest of self-improvement, and getting 1% better every day leads to significant growth over time. The chapter emphasizes focusing on systems rather than goals, as your outcomes are a lagging measure of your habits.";
-  }
-  
-  return "I understand you're asking about \"" + userInput + "\". As this is a demo, I have limited pre-programmed responses. In a real implementation, this would connect to an AI model that could provide detailed answers about any aspect of the book you're reading.";
-}
 
 export default AIAssistantPanel;

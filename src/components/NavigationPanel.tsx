@@ -1,160 +1,163 @@
 
-import React, { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { BookOpen, Search, UploadCloud, Bookmark, Settings, ChevronRight } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import BookUploader from "./BookUploader";
-import { Card, CardContent } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { supabase } from "@/integrations/supabase/client";
-import { useQuery } from "@tanstack/react-query";
-import { useAuth } from "@/contexts/AuthContext";
-import { toast } from "@/components/ui/use-toast";
+import React, { useEffect, useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { Plus, Book, LogOut } from 'lucide-react';
+import BookUploader from './BookUploader';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/components/ui/use-toast';
 
-interface Book {
+type Book = {
   id: string;
   title: string;
   author: string | null;
-  file_path: string;
-}
+  cover_image: string | null;
+};
 
 const NavigationPanel = () => {
+  const [books, setBooks] = useState<Book[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
-  const [uploaderOpen, setUploaderOpen] = useState(false);
-  const [booksOpen, setBooksOpen] = useState(true);
-  const [highlightsOpen, setHighlightsOpen] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
 
-  // Fetch books from database
-  const { data: books, isLoading } = useQuery({
-    queryKey: ['books'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('books')
-        .select('id, title, author, file_path')
-        .order('created_at', { ascending: false });
+  // Fetch user's books
+  useEffect(() => {
+    const fetchBooks = async () => {
+      if (!user) return;
       
-      if (error) {
+      try {
+        setLoading(true);
+        const { data, error } = await supabase
+          .from('books')
+          .select('id, title, author, cover_image')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        setBooks(data || []);
+        
+        // Check for currently selected book
+        const currentBookId = localStorage.getItem('currentBookId');
+        if (currentBookId) {
+          setSelectedBookId(currentBookId);
+        } else if (data && data.length > 0) {
+          // Select the first book if none is selected
+          setSelectedBookId(data[0].id);
+          localStorage.setItem('currentBookId', data[0].id);
+        }
+      } catch (error: any) {
         toast({
-          title: 'Error loading books',
+          title: "Error fetching books",
           description: error.message,
-          variant: 'destructive',
+          variant: "destructive",
         });
-        throw new Error(error.message);
+      } finally {
+        setLoading(false);
       }
-      
-      return data as Book[];
-    },
-    enabled: !!user,
-  });
+    };
 
-  const filteredBooks = books?.filter(book => 
-    book.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    (book.author && book.author.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+    fetchBooks();
+  }, [user]);
+
+  const handleBookUploadSuccess = () => {
+    // Close the dialog
+    setDialogOpen(false);
+    
+    // Refresh the book list
+    if (user) {
+      supabase
+        .from('books')
+        .select('id, title, author, cover_image')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .then(({ data, error }) => {
+          if (error) {
+            toast({
+              title: "Error refreshing books",
+              description: error.message,
+              variant: "destructive",
+            });
+          } else {
+            setBooks(data || []);
+          }
+        });
+    }
+  };
+
+  const selectBook = (bookId: string) => {
+    setSelectedBookId(bookId);
+    localStorage.setItem('currentBookId', bookId);
+    
+    // Force reload to update the PDF viewer
+    window.location.reload();
+  };
 
   return (
-    <div className="h-full bg-card flex flex-col">
-      <div className="p-4">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            type="search"
-            placeholder="Search books & notes..."
-            className="pl-8 bg-background"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
+    <div className="h-full flex flex-col bg-card">
+      <div className="p-4 flex items-center justify-between border-b">
+        <h2 className="font-semibold">My Library</h2>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm" variant="ghost">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Book
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Upload a new book</DialogTitle>
+            </DialogHeader>
+            <BookUploader onUploadSuccess={handleBookUploadSuccess} />
+          </DialogContent>
+        </Dialog>
       </div>
-
-      <Separator />
-
-      <div className="p-4">
+      
+      <ScrollArea className="flex-1 p-4">
+        {loading ? (
+          <div className="flex justify-center p-4">
+            <div className="animate-spin rounded-full h-6 w-6 border-t-2 border-b-2 border-primary"></div>
+          </div>
+        ) : books.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <Book className="h-12 w-12 mx-auto mb-2 opacity-20" />
+            <p>Your library is empty</p>
+            <p className="text-sm">Upload your first book to get started</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {books.map((book) => (
+              <Button
+                key={book.id}
+                variant={selectedBookId === book.id ? "secondary" : "ghost"}
+                className="w-full justify-start font-normal h-auto py-2 px-3"
+                onClick={() => selectBook(book.id)}
+              >
+                <div className="truncate text-left">
+                  <p className="truncate">{book.title}</p>
+                  {book.author && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      {book.author}
+                    </p>
+                  )}
+                </div>
+              </Button>
+            ))}
+          </div>
+        )}
+      </ScrollArea>
+      
+      <div className="p-4 border-t mt-auto">
         <Button 
           variant="outline" 
-          className="w-full justify-start gap-2"
-          onClick={() => setUploaderOpen(true)}
+          className="w-full"
+          onClick={signOut}
         >
-          <UploadCloud className="h-4 w-4" />
-          Upload Book
-        </Button>
-        <BookUploader open={uploaderOpen} onOpenChange={setUploaderOpen} />
-      </div>
-
-      <Separator />
-
-      <div className="flex-1 overflow-auto">
-        {/* Books Section */}
-        <Collapsible open={booksOpen} onOpenChange={setBooksOpen} className="px-4 pt-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-medium text-sm text-muted-foreground">LIBRARY</h3>
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-                <ChevronRight className={`h-4 w-4 transition-transform ${booksOpen ? "rotate-90" : ""}`} />
-              </Button>
-            </CollapsibleTrigger>
-          </div>
-          <CollapsibleContent className="space-y-1 mb-4">
-            <Button variant="ghost" className="w-full justify-start gap-2 font-normal">
-              <BookOpen className="h-4 w-4" />
-              All Books
-            </Button>
-            <Button variant="ghost" className="w-full justify-start gap-2 font-normal">
-              <Bookmark className="h-4 w-4" />
-              Bookmarks
-            </Button>
-
-            {isLoading ? (
-              <div className="py-4 flex justify-center">
-                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-primary"></div>
-              </div>
-            ) : filteredBooks && filteredBooks.length > 0 ? (
-              filteredBooks.map((book) => (
-                <Button
-                  key={book.id}
-                  variant="ghost"
-                  className="w-full justify-start text-left font-normal text-sm pl-10"
-                >
-                  {book.title}
-                </Button>
-              ))
-            ) : (
-              <div className="py-2 text-center text-sm text-muted-foreground">
-                {books && books.length === 0 ? "No books yet" : "No matching books found"}
-              </div>
-            )}
-          </CollapsibleContent>
-        </Collapsible>
-
-        {/* Highlights Section */}
-        <Collapsible open={highlightsOpen} onOpenChange={setHighlightsOpen} className="px-4 pb-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-medium text-sm text-muted-foreground">HIGHLIGHTS & NOTES</h3>
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
-                <ChevronRight className={`h-4 w-4 transition-transform ${highlightsOpen ? "rotate-90" : ""}`} />
-              </Button>
-            </CollapsibleTrigger>
-          </div>
-          <CollapsibleContent className="space-y-2">
-            {/* We'll implement highlights later when we have books */}
-            <div className="text-center text-sm text-muted-foreground py-2">
-              Highlights will appear here
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
-      </div>
-
-      <Separator />
-
-      <div className="p-4 flex flex-col gap-2">
-        <Button variant="ghost" className="w-full justify-start gap-2">
-          <Settings className="h-4 w-4" />
-          Settings
-        </Button>
-        <Button variant="outline" className="w-full justify-start" onClick={() => signOut()}>
+          <LogOut className="h-4 w-4 mr-2" />
           Sign Out
         </Button>
       </div>
