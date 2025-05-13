@@ -13,6 +13,9 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { UploadCloud } from "lucide-react";
 import { toast } from "@/components/ui/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 interface BookUploaderProps {
   open: boolean;
@@ -22,6 +25,11 @@ interface BookUploaderProps {
 const BookUploader: React.FC<BookUploaderProps> = ({ open, onOpenChange }) => {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [title, setTitle] = useState("");
+  const [author, setAuthor] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -38,6 +46,11 @@ const BookUploader: React.FC<BookUploaderProps> = ({ open, onOpenChange }) => {
     
     if (validFormats.includes(selectedFile.type)) {
       setFile(selectedFile);
+      // Auto-fill title with filename (without extension)
+      if (!title) {
+        const fileNameWithoutExt = selectedFile.name.split(".").slice(0, -1).join(".");
+        setTitle(fileNameWithoutExt);
+      }
     } else {
       toast({
         title: "Invalid file format",
@@ -53,19 +66,77 @@ const BookUploader: React.FC<BookUploaderProps> = ({ open, onOpenChange }) => {
     }
   };
 
-  const handleUpload = () => {
-    if (file) {
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!file || !user) return;
+      
+      setIsUploading(true);
+      
+      try {
+        // 1. Upload file to Supabase storage
+        const fileExt = file.name.split('.').pop();
+        const filePath = `${user.id}/${Date.now()}-${file.name}`;
+        
+        const { error: uploadError, data } = await supabase.storage
+          .from('books')
+          .upload(filePath, file);
+          
+        if (uploadError) throw uploadError;
+        
+        // 2. Insert record in books table
+        const { error: dbError } = await supabase
+          .from('books')
+          .insert({
+            title: title || file.name,
+            author: author || null,
+            file_path: filePath,
+            file_type: file.type,
+          });
+          
+        if (dbError) throw dbError;
+        
+        return { success: true };
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    onSuccess: () => {
       toast({
         title: "Book uploaded successfully",
-        description: `"${file.name}" has been added to your library.`,
+        description: `"${title || file?.name}" has been added to your library.`,
       });
+      queryClient.invalidateQueries({ queryKey: ['books'] });
       onOpenChange(false);
-      setFile(null);
+      resetForm();
+    },
+    onError: (error: any) => {
+      console.error("Upload error:", error);
+      toast({
+        title: "Upload failed",
+        description: error.message || "There was an error uploading your book.",
+        variant: "destructive"
+      });
+    }
+  });
+
+  const handleUpload = () => {
+    if (file) {
+      uploadMutation.mutate();
     }
   };
 
+  const resetForm = () => {
+    setFile(null);
+    setTitle("");
+    setAuthor("");
+    setIsUploading(false);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(isOpen) => {
+      if (!isOpen) resetForm();
+      onOpenChange(isOpen);
+    }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Upload Book</DialogTitle>
@@ -129,13 +200,35 @@ const BookUploader: React.FC<BookUploaderProps> = ({ open, onOpenChange }) => {
           )}
         </div>
 
-        <DialogFooter className="sm:justify-between">
+        <div className="space-y-3">
           <div>
-            <Label htmlFor="book-title" className="text-xs">Book Title (Optional)</Label>
-            <Input id="book-title" placeholder="Will use filename if empty" className="mt-1" />
+            <Label htmlFor="book-title" className="text-xs">Book Title</Label>
+            <Input 
+              id="book-title" 
+              placeholder="Enter book title" 
+              className="mt-1" 
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
           </div>
-          <Button onClick={handleUpload} disabled={!file}>
-            Upload Book
+          <div>
+            <Label htmlFor="book-author" className="text-xs">Author (Optional)</Label>
+            <Input 
+              id="book-author" 
+              placeholder="Enter author name" 
+              className="mt-1" 
+              value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <DialogFooter className="flex justify-end">
+          <Button 
+            onClick={handleUpload} 
+            disabled={!file || isUploading}
+          >
+            {isUploading ? "Uploading..." : "Upload Book"}
           </Button>
         </DialogFooter>
       </DialogContent>
