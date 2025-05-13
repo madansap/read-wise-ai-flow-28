@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChevronLeft, ChevronRight, Sun, Moon, BookOpen } from 'lucide-react';
@@ -9,6 +9,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
 import { useReading } from '@/contexts/ReadingContext';
+import { useSelection } from '@/contexts/SelectionContext';
+import SelectionToolbar from './SelectionToolbar';
 
 // Set up worker source for PDF.js
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
@@ -23,11 +25,31 @@ const ReadingPanel = () => {
     currentBookId, setCurrentBookId,
     currentBookTitle, setCurrentBookTitle
   } = useReading();
+
+  // Use the SelectionContext
+  const { 
+    handleTextSelection, 
+    clearSelection,
+    setPageNumber
+  } = useSelection();
   
   const [theme, setTheme] = useState<'light' | 'dark' | 'classic'>('light');
   const [selectedBook, setSelectedBook] = useState<any>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const { user } = useAuth();
+
+  // Set up text selection event handlers
+  const onMouseUp = useCallback((e: React.MouseEvent) => {
+    handleTextSelection(e.nativeEvent);
+  }, [handleTextSelection]);
+
+  const onDocumentClick = useCallback((e: React.MouseEvent) => {
+    // Clear selection when clicking outside text
+    const selection = window.getSelection();
+    if (!selection || selection.toString().trim().length === 0) {
+      clearSelection();
+    }
+  }, [clearSelection]);
 
   // Load the current book from localStorage or fetch from database
   useEffect(() => {
@@ -96,6 +118,11 @@ const ReadingPanel = () => {
     return () => clearTimeout(timer);
   }, [currentPage, selectedBook, user]);
 
+  // Update selection context with current page when page changes
+  useEffect(() => {
+    setPageNumber(currentPage);
+  }, [currentPage, setPageNumber]);
+
   // Load theme from localStorage
   useEffect(() => {
     const savedTheme = localStorage.getItem('readingTheme') as 'light' | 'dark' | 'classic';
@@ -108,6 +135,11 @@ const ReadingPanel = () => {
   useEffect(() => {
     localStorage.setItem('readingTheme', theme);
   }, [theme]);
+
+  // Clear selection when changing pages
+  useEffect(() => {
+    clearSelection();
+  }, [currentPage, clearSelection]);
 
   const loadBook = async (book: any) => {
     if (!book || !book.file_path) return;
@@ -293,7 +325,10 @@ const ReadingPanel = () => {
       </div>
 
       {/* Reading area */}
-      <div className={`flex-1 overflow-auto p-4 ${themeClasses[theme]}`}>
+      <div 
+        className={`flex-1 overflow-auto p-4 ${themeClasses[theme]}`}
+        onClick={onDocumentClick}
+      >
         {selectedBook && pdfUrl ? (
           <div id="pdf-container" className="flex justify-center">
             <Document
@@ -333,7 +368,8 @@ const ReadingPanel = () => {
                     }}
                     width={Math.min(window.innerWidth * 0.9, 800)} // Responsive width
                     height={null} // Allow natural height
-                    id={`page_${index + 1}`}
+                    data-page-number={index + 1}
+                    onMouseUp={onMouseUp}
                   />
                 </div>
               ))}
@@ -359,6 +395,9 @@ const ReadingPanel = () => {
             </Card>
           </div>
         )}
+        
+        {/* Selection Toolbar Component */}
+        <SelectionToolbar />
       </div>
     </div>
   );

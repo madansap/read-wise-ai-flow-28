@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { ReadingProvider } from "@/contexts/ReadingContext";
+import { SelectionProvider } from "@/contexts/SelectionContext";
 import RequireAuth from "@/components/RequireAuth";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
@@ -22,15 +23,17 @@ const App = () => (
         <AuthProvider>
           <ThemeProvider>
             <ReadingProvider>
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/" element={
-                  <RequireAuth>
-                    <Index />
-                  </RequireAuth>
-                } />
-                <Route path="*" element={<NotFound />} />
-              </Routes>
+              <SelectionProvider>
+                <Routes>
+                  <Route path="/login" element={<Login />} />
+                  <Route path="/" element={
+                    <RequireAuth>
+                      <Index />
+                    </RequireAuth>
+                  } />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </SelectionProvider>
             </ReadingProvider>
           </ThemeProvider>
         </AuthProvider>

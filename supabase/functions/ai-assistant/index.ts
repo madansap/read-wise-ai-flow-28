@@ -6,7 +6,9 @@ import {
   quizSystemPrompt,
   quizUserPromptTemplate,
   quizEvalSystemPrompt,
-  quizEvalUserPromptTemplate
+  quizEvalUserPromptTemplate,
+  explainSelectionSystemPrompt,
+  explainSelectionUserPromptTemplate
 } from "./prompts.ts";
 
 const corsHeaders = {
@@ -86,6 +88,12 @@ serve(async (req) => {
           userAnswerIndex
         );
         temperature = 0.4; // Balanced between creativity and accuracy
+        break;
+      
+      case "explainSelection":
+        systemPrompt = explainSelectionSystemPrompt;
+        userPrompt = explainSelectionUserPromptTemplate(bookContent);
+        temperature = 0.2; // Precise explanations
         break;
       
       default:
