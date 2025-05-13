@@ -84,7 +84,7 @@ serve(async (req) => {
         ],
         temperature: quizMode ? 0.7 : 0.3,
       }),
-    });
+    }),
 
     if (!response.ok) {
       const errorData = await response.json();
