@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ChevronLeft, ChevronRight, Sun, Moon, BookOpen } from 'lucide-react';
@@ -30,7 +30,8 @@ const ReadingPanel = () => {
   const { 
     handleTextSelection, 
     clearSelection,
-    setPageNumber
+    setPageNumber,
+    isSelectionToolbarVisible
   } = useSelection();
   
   const [theme, setTheme] = useState<'light' | 'dark' | 'classic'>('light');
@@ -38,18 +39,13 @@ const ReadingPanel = () => {
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const { user } = useAuth();
 
-  // Set up text selection event handlers
+  // Reference to the container for additional event listeners
+  const containerRef = useRef<HTMLDivElement>(null);
+  
+  // Set up text selection event handler (do not block default behavior)
   const onMouseUp = useCallback((e: React.MouseEvent) => {
     handleTextSelection(e.nativeEvent);
   }, [handleTextSelection]);
-
-  const onDocumentClick = useCallback((e: React.MouseEvent) => {
-    // Clear selection when clicking outside text
-    const selection = window.getSelection();
-    if (!selection || selection.toString().trim().length === 0) {
-      clearSelection();
-    }
-  }, [clearSelection]);
 
   // Load the current book from localStorage or fetch from database
   useEffect(() => {
@@ -171,7 +167,7 @@ const ReadingPanel = () => {
 
   // Add observer to track visible pages
   useEffect(() => {
-    if (!totalPages || !pdfUrl) return;
+    if (!totalPages || !pdfUrl || isSelectionToolbarVisible) return;
 
     const observerOptions = {
       root: document.querySelector('#pdf-container'),
@@ -184,7 +180,6 @@ const ReadingPanel = () => {
         if (entry.isIntersecting) {
           const pageId = entry.target.id;
           const pageNum = parseInt(pageId.split('_')[1]);
-          
           if (pageNum !== currentPage) {
             setCurrentPage(pageNum);
           }
@@ -203,7 +198,7 @@ const ReadingPanel = () => {
     return () => {
       pageObserver.disconnect();
     };
-  }, [totalPages, pdfUrl, currentPage, setCurrentPage]);
+  }, [totalPages, pdfUrl, currentPage, setCurrentPage, isSelectionToolbarVisible]);
 
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= totalPages) {
@@ -327,7 +322,7 @@ const ReadingPanel = () => {
       {/* Reading area */}
       <div 
         className={`flex-1 overflow-auto p-4 ${themeClasses[theme]}`}
-        onClick={onDocumentClick}
+        ref={containerRef}
       >
         {selectedBook && pdfUrl ? (
           <div id="pdf-container" className="flex justify-center">
@@ -350,27 +345,27 @@ const ReadingPanel = () => {
               }}
             >
               {Array.from(new Array(totalPages), (_, index) => (
-                <div key={`page_${index + 1}`} className="mb-8">
+                <div key={`page_${index + 1}`} className="mb-8" onMouseUp={onMouseUp}>
                   <div className="text-center text-sm text-muted-foreground mb-2">
                     Page {index + 1} of {totalPages}
                   </div>
-                  <Page
-                    key={`page_${index + 1}`}
-                    pageNumber={index + 1}
-                    renderTextLayer={true}
-                    renderAnnotationLayer={true}
-                    className={`border shadow-sm mx-auto ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
-                    onLoadSuccess={() => {
-                      if (index + 1 === currentPage) {
-                        // If this is the current page the user was on, scroll to it
-                        document.getElementById(`page_${currentPage}`)?.scrollIntoView({ behavior: 'smooth' });
-                      }
-                    }}
-                    width={Math.min(window.innerWidth * 0.9, 800)} // Responsive width
-                    height={null} // Allow natural height
-                    data-page-number={index + 1}
-                    onMouseUp={onMouseUp}
-                  />
+                  <div className="relative">
+                    <Page
+                      key={`page_${index + 1}`}
+                      pageNumber={index + 1}
+                      renderTextLayer={true}
+                      renderAnnotationLayer={true}
+                      className={`border shadow-sm mx-auto ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
+                      onLoadSuccess={() => {
+                        if (index + 1 === currentPage) {
+                          setIsLoadingText(false);
+                        }
+                      }}
+                      width={Math.min(window.innerWidth * 0.9, 800)}
+                      height={null}
+                      data-page-number={index + 1}
+                    />
+                  </div>
                 </div>
               ))}
             </Document>

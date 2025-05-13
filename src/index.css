@@ -198,10 +198,82 @@
   animation: fadeIn 0.3s ease-out;
 }
 
-/* Improve text selection in PDF */
+/* PDF text layer enhancements for selection */
 .react-pdf__Page__textContent {
   user-select: text;
   cursor: text;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  overflow: hidden;
+  transform: translateZ(0); /* Create new stacking context */
+  will-change: transform; /* Optimize rendering */
+}
+
+.react-pdf__Page__textContent span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  transform-origin: 0% 0%;
+  pointer-events: auto;
+}
+
+/* Prevent page movement during selection */
+.react-pdf__Page {
+  transform: translateZ(0);
+  will-change: transform;
+  backface-visibility: hidden;
+  transition: none !important;
+}
+
+/* Make the PDF text layer elements selectable with visible highlight */
+.react-pdf__Page__textContent span::selection {
+  background-color: rgba(0, 123, 255, 0.3) !important;
+  color: transparent !important;
+}
+
+/* Remove default browser selection styles */
+::selection {
+  background-color: rgba(0, 123, 255, 0.3);
+  color: inherit;
+}
+
+/* Additional class to prevent selection flicker */
+.prevent-select {
+  user-select: none;
+}
+
+/* Page transitions */
+.react-pdf__Page {
+  transition: all 0.2s ease;
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Prevent page flicker during selection */
+.react-pdf__Page.selecting {
+  transform: none !important;
+}
+
+/* Highlight marker positioning */
+.highlights-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.highlight-marker {
+  position: absolute;
+  border-radius: 0.125rem;
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 /* Improve scrollbar styling */
@@ -325,6 +397,49 @@
   .h-full {
     height: 100% !important;
   }
+  
+  /* Text selection styling */
+  ::selection {
+    @apply bg-blue-200 dark:bg-blue-800/50;
+  }
+  
+  /* Selection toolbar animation */
+  .animate-in {
+    animation-duration: 150ms;
+    animation-timing-function: cubic-bezier(0.1, 0.9, 0.2, 1);
+    animation-fill-mode: forwards;
+  }
+  
+  .fade-in {
+    opacity: 0;
+    animation-name: fadeIn;
+  }
+  
+  .slide-in-from-top-2 {
+    transform: translateY(-0.5rem);
+    animation-name: slideInFromTop;
+  }
+  
+  /* Highlight markers */
+  .highlight-marker[data-highlight-color="bg-yellow-200 dark:bg-yellow-800/50"] {
+    @apply bg-yellow-200 dark:bg-yellow-800/50;
+  }
+  
+  .highlight-marker[data-highlight-color="bg-green-200 dark:bg-green-800/50"] {
+    @apply bg-green-200 dark:bg-green-800/50;
+  }
+  
+  .highlight-marker[data-highlight-color="bg-blue-200 dark:bg-blue-800/50"] {
+    @apply bg-blue-200 dark:bg-blue-800/50;
+  }
+  
+  .highlight-marker[data-highlight-color="bg-purple-200 dark:bg-purple-800/50"] {
+    @apply bg-purple-200 dark:bg-purple-800/50;
+  }
+  
+  .highlight-marker[data-highlight-color="bg-pink-200 dark:bg-pink-800/50"] {
+    @apply bg-pink-200 dark:bg-pink-800/50;
+  }
 }
 
 /* Improved scrollbar styling */
@@ -393,4 +508,40 @@
     opacity: 1;
     transform: scale(1.2);
   }
+}
+
+/* Selection animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideInFromTop {
+  from {
+    transform: translateY(-0.5rem);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* Ensure the Page doesn't flicker during selection */
+.react-pdf__Page {
+  will-change: transform;
+  backface-visibility: hidden;
+}
+
+/* Prevent white flash */
+.selection-toolbar {
+  animation: fadeIn 150ms ease-in;
+  will-change: transform, opacity;
+}
+
+/* Ensure text content is selectable */
+.react-pdf__Page__textContent {
+  pointer-events: auto !important;
 }

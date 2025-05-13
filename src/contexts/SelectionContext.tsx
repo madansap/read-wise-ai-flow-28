@@ -20,47 +20,65 @@ interface SelectionContextType {
   setIsSelectionToolbarVisible: (visible: boolean) => void;
   handleTextSelection: (event: MouseEvent) => void;
   clearSelection: () => void;
+  isSelecting: boolean;
 }
 
 // Create the context with undefined initial value
 const SelectionContext = createContext<SelectionContextType | undefined>(undefined);
 
-// Provider component
+// Selection context provider component
 export const SelectionProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [selectedText, setSelectedText] = useState<string>('');
   const [selectionPosition, setSelectionPosition] = useState<SelectionPosition | null>(null);
   const [pageNumber, setPageNumber] = useState<number>(0);
   const [isSelectionToolbarVisible, setIsSelectionToolbarVisible] = useState<boolean>(false);
-
-  // Handle text selection
+  const [isSelecting, setIsSelecting] = useState<boolean>(false);
+  
+  // Handle text selection - simplified
   const handleTextSelection = useCallback((event: MouseEvent) => {
-    const selection = window.getSelection();
+    // Set selecting mode
+    setIsSelecting(true);
     
-    if (selection && selection.toString().trim().length > 0) {
-      // Get selected text
-      const text = selection.toString().trim();
-      setSelectedText(text);
-      
-      // Get selection position for toolbar placement
-      try {
-        const range = selection.getRangeAt(0);
-        const rect = range.getBoundingClientRect();
-        
-        setSelectionPosition({
-          x: rect.left + rect.width / 2, // Center of selection
-          y: rect.top - 10, // Slightly above selection
-          width: rect.width,
-          height: rect.height
-        });
-        
-        // Make toolbar visible
-        setIsSelectionToolbarVisible(true);
-      } catch (error) {
-        console.error('Error getting selection position:', error);
-        setSelectionPosition(null);
-      }
-    } else {
+    // Get the selection
+    const selection = window.getSelection();
+    if (!selection) {
+      setIsSelecting(false);
+      return;
+    }
+    
+    // Get the selected text
+    const text = selection.toString().trim();
+    
+    // If no text is selected, clear the selection
+    if (text.length === 0) {
       clearSelection();
+      setIsSelecting(false);
+      return;
+    }
+    
+    // Set the selected text
+    setSelectedText(text);
+    
+    try {
+      // Get the selection range
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      
+      // Set the selection position
+      setSelectionPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height
+      });
+      
+      // Show the toolbar
+      setIsSelectionToolbarVisible(true);
+      setIsSelecting(false);
+    } catch (error) {
+      console.error('Error getting selection:', error);
+      clearSelection();
+      setIsSelecting(false);
     }
   }, []);
 
@@ -71,8 +89,8 @@ export const SelectionProvider: React.FC<{ children: ReactNode }> = ({ children 
     setIsSelectionToolbarVisible(false);
   }, []);
 
-  // The value provided to consuming components
-  const value = {
+  // Context value
+  const value: SelectionContextType = {
     selectedText,
     setSelectedText,
     selectionPosition,
@@ -82,7 +100,8 @@ export const SelectionProvider: React.FC<{ children: ReactNode }> = ({ children 
     isSelectionToolbarVisible,
     setIsSelectionToolbarVisible,
     handleTextSelection,
-    clearSelection
+    clearSelection,
+    isSelecting
   };
 
   return (
@@ -92,11 +111,13 @@ export const SelectionProvider: React.FC<{ children: ReactNode }> = ({ children 
   );
 };
 
-// Custom hook to use the context
-export const useSelection = () => {
+// Hook for using the selection context
+export const useSelection = (): SelectionContextType => {
   const context = useContext(SelectionContext);
+  
   if (context === undefined) {
     throw new Error('useSelection must be used within a SelectionProvider');
   }
+  
   return context;
 }; 

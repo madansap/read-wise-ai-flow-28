@@ -51,10 +51,12 @@ const SelectionToolbar = () => {
   // Position the toolbar above the selection
   const toolbarStyle = {
     position: 'fixed' as const,
-    top: `${selectionPosition.y - 45}px`,
-    left: `${selectionPosition.x - 60}px`,
+    top: `${selectionPosition.y - 50}px`, // Slightly higher above the text
+    left: `${selectionPosition.x}px`,
     transform: 'translateX(-50%)',
-    zIndex: 1000,
+    zIndex: 9999,
+    opacity: 1,
+    transition: 'opacity 0.2s ease, transform 0.2s ease'
   };
 
   // Handle explain button click
@@ -113,6 +115,7 @@ const SelectionToolbar = () => {
     setIsSavingNote(true);
     
     try {
+      // Create new note record directly
       const { error } = await supabase
         .from('notes')
         .insert({
@@ -133,12 +136,14 @@ const SelectionToolbar = () => {
       });
       
       setIsNoteDialogOpen(false);
+      setNoteTitle('');
+      setNoteContent('');
       clearSelection();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving note:', error);
       toast({
         title: "Error saving note",
-        description: "Could not save your note. Please try again.",
+        description: error.message || "An unexpected error occurred.",
         variant: "destructive",
       });
     } finally {
@@ -158,13 +163,14 @@ const SelectionToolbar = () => {
     setIsSavingHighlight(true);
     
     try {
+      // Create new highlight record directly
       const { error } = await supabase
         .from('highlights')
         .insert({
           user_id: user.id,
           book_id: currentBookId,
           page_number: currentPage,
-          selected_text: selectedText,
+          text: selectedText, // Match the database column name
           color: color
         });
         
@@ -177,11 +183,11 @@ const SelectionToolbar = () => {
       
       setIsHighlightPopoverOpen(false);
       clearSelection();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving highlight:', error);
       toast({
-        title: "Error highlighting text",
-        description: "Could not save your highlight. Please try again.",
+        title: "Error saving highlight",
+        description: error.message || "An unexpected error occurred.",
         variant: "destructive",
       });
     } finally {
@@ -203,12 +209,13 @@ const SelectionToolbar = () => {
       {/* Selection Toolbar */}
       <div 
         style={toolbarStyle} 
-        className="bg-background rounded-lg border shadow-md flex items-center p-1 animate-in fade-in slide-in-from-top-2 duration-300"
+        className="selection-toolbar bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-lg flex items-center p-1.5 gap-1 animate-in fade-in slide-in-from-top-5 duration-200"
+        onMouseDown={(e) => e.stopPropagation()} 
       >
         <Button 
           variant="ghost" 
           size="sm" 
-          className="h-8 w-8 p-0" 
+          className="h-8 w-8 p-0 hover:bg-blue-100 dark:hover:bg-blue-900" 
           title="Explain" 
           onClick={handleExplain}
         >
@@ -217,7 +224,7 @@ const SelectionToolbar = () => {
         <Button 
           variant="ghost" 
           size="sm" 
-          className="h-8 w-8 p-0" 
+          className="h-8 w-8 p-0 hover:bg-blue-100 dark:hover:bg-blue-900" 
           title="Add Note" 
           onClick={handleSaveNote}
         >
@@ -228,7 +235,7 @@ const SelectionToolbar = () => {
             <Button 
               variant="ghost" 
               size="sm" 
-              className="h-8 w-8 p-0" 
+              className="h-8 w-8 p-0 hover:bg-blue-100 dark:hover:bg-blue-900" 
               title="Highlight" 
               onClick={handleHighlight}
             >
