@@ -304,3 +304,17 @@
     transform: scale(1.2);
   }
 }
+
+@layer components {
+  /* Fixed chat input styling */
+  .fixed-chat-input {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: hsl(var(--background));
+    border-top: 1px solid hsl(var(--border));
+    box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.05);
+    z-index: 20;
+  }
+}

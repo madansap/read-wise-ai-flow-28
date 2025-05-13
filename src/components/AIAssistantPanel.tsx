@@ -378,9 +378,9 @@ const AIAssistantPanel = () => {
           </TabsList>
         </div>
         
-        <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden relative">
+        <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden">
           {/* Messages container with auto-scroll */}
-          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4 pb-[130px]">
+          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
             {messagesLoading ? (
               <div className="flex justify-center items-center h-20">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
@@ -441,10 +441,13 @@ const AIAssistantPanel = () => {
             )}
             {/* Invisible element to scroll to */}
             <div ref={messagesEndRef} />
+            
+            {/* Add extra space at the bottom to prevent content being hidden behind the input box */}
+            <div className="h-[170px] md:h-[120px]"></div>
           </div>
           
           {/* Fixed bottom input area */}
-          <div className="absolute bottom-0 left-0 right-0 bg-background border-t z-10">
+          <div className="fixed-chat-input">
             {/* Quick prompts */}
             <div className="px-3 grid grid-cols-1 sm:grid-cols-2 gap-2 my-2">
               {QUICK_PROMPTS.map((prompt, index) => (
