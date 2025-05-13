@@ -1,0 +1,186 @@
+# Overview
+The AI Reading Companion (v0.1) is a lightweight but powerful prototype designed to test product viability. It allows users to upload a book, read it seamlessly, ask the AI contextual questions, get quizzed, and receive intelligent evaluation—all within a clean and focused dashboard UI. This product aims to enhance the reading experience by making it more interactive and insightful.
+
+# Core Features
+1.  **Upload & Store Books**
+    *   **What it does:** Allows users to upload PDF books (max 50MB). Books are stored in Supabase storage (per-user). The system extracts and stores the title/filename.
+    *   **Why it's important:** Enables users to bring their own content into the application for a personalized reading and learning experience.
+    *   **How it works:** User selects a PDF file via the UI. The file is uploaded to a user-specific folder in Supabase storage. Metadata (title, filename) is saved in a `books` database table. Uploaded books appear in a list in the left sidebar.
+
+2.  **Seamless Reading Experience**
+    *   **What it does:** Renders the full PDF using PDF.js with lazy loading for smooth performance. Provides page-by-page navigation and tracks the current page for AI context and progress.
+    *   **Why it's important:** Offers a fluid and uninterrupted reading interface, crucial for user engagement.
+    *   **How it works:** When a book is selected, it's loaded into a PDF.js powered viewer. Navigation controls allow users to move through pages. The current page number is maintained in the application state.
+
+3.  **Theme Support**
+    *   **What it does:** The reader can toggle between White (default), Dark, and Classical (sepia background, serif font) themes. The selected theme is persisted using localStorage or a Supabase user profile.
+    *   **Why it's important:** Enhances user comfort and accessibility by allowing customization of the reading environment.
+    *   **How it works:** A UI toggle allows theme selection. CSS variables or classes are dynamically applied to change the appearance. The choice is saved locally or in the user's profile on Supabase.
+
+4.  **Ask Questions to AI**
+    *   **What it does:** Users can enter prompts in a chat panel (right panel). The application sends the current page text (or highlighted text in future iterations) and the user's prompt to an AI. The AI responds with insightful, markdown-formatted explanations.
+    *   **Why it's important:** Provides instant clarification and deeper understanding of the content being read.
+    *   **How it works:** User types a question. The frontend sends the question along with context (current page text) to a Supabase Edge Function. This function queries the OpenAI GPT-4o API and returns the response to the UI.
+
+5.  **Quiz & Evaluation**
+    *   **What it does:** A "Quiz Me" tab generates 1–3 questions from the current page. Users can answer interactively. The AI evaluates answers, gives feedback, and provides suggestions. All interactions are saved in Supabase.
+    *   **Why it's important:** Reinforces learning and helps users assess their comprehension of the material.
+    *   **How it works:** User clicks "Quiz Me." The frontend requests quiz questions from the Supabase Edge Function based on the current page text. The AI generates questions. User submits answers, which are then sent back to the AI for evaluation via the Edge Function. Feedback is displayed.
+
+6.  **Dashboard UI**
+    *   **What it does:** Provides a three-panel layout:
+        *   Left: Book library, Upload button.
+        *   Center: Reader (PDF).
+        *   Right: AI Assistant (Chat + Quiz), with quick prompt buttons below the chat.
+    *   **Why it's important:** Organizes functionalities in an intuitive and accessible manner.
+    *   **How it works:** The main application view is structured using React components to create the described layout.
+
+7.  **Authentication**
+    *   **What it does:** Uses Supabase Auth (email/password) to secure user accounts. Each user's books and chats are private.
+    *   **Why it's important:** Protects user data and personalizes the application experience.
+    *   **How it works:** Users sign up and log in via a standard authentication flow managed by Supabase. Session management ensures data privacy.
+
+# User Experience
+*   **User Personas:**
+    *   Students looking for help understanding complex texts.
+    *   Lifelong learners wanting to engage more deeply with books.
+    *   Professionals needing to quickly grasp key concepts from documents.
+*   **Key User Flows:**
+    1.  User signs up/logs in.
+    2.  User uploads a PDF book.
+    3.  User selects a book from their library to read.
+    4.  User reads the book, navigating pages.
+    5.  User asks the AI a question about the current page content.
+    6.  User requests a quiz on the current page, answers questions, and receives feedback.
+    7.  User switches reading themes.
+*   **UI/UX Considerations:**
+    *   Clean, minimal, and focused interface to minimize distractions.
+    *   Intuitive navigation for both book content and application features.
+    *   Responsive design for desktop and tablet usability.
+    *   Fast load times, especially for books (<5s target).
+    *   Clear visual feedback for AI interactions and uploads.
+
+# Technical Architecture
+*   **System Components:**
+    *   **Frontend:** Vite + React application with Tailwind CSS for styling.
+    *   **PDF Viewer:** PDF.js library integrated into a React component.
+    *   **Theme Switcher:** Implemented using Tailwind CSS and React Context API or Zustand for state management.
+    *   **Backend Services:** Supabase (PostgreSQL Database, Storage, Authentication, Edge Functions).
+    *   **AI Processing:** OpenAI GPT-4o API, accessed via Supabase Edge Functions.
+*   **Data Models:**
+    *   `books`:
+        *   `id` (PK, uuid)
+        *   `user_id` (FK to `auth.users`, uuid)
+        *   `title` (text)
+        *   `filename` (text)
+        *   `storage_path` (text)
+        *   `created_at` (timestampz)
+    *   `interactions`:
+        *   `id` (PK, uuid)
+        *   `user_id` (FK to `auth.users`, uuid)
+        *   `book_id` (FK to `books`, uuid)
+        *   `page_number` (integer)
+        *   `type` (text - e.g., 'chat', 'quiz_question', 'quiz_answer')
+        *   `user_input` (text)
+        *   `ai_response` (text, markdown)
+        *   `created_at` (timestampz)
+    *   `quizzes`:
+        *   `id` (PK, uuid)
+        *   `interaction_id` (FK to `interactions` - linking to the generating interaction)
+        *   `book_id` (FK to `books`, uuid)
+        *   `page_number` (integer)
+        *   `question` (text)
+        *   `user_answer` (text)
+        *   `ai_feedback` (text)
+        *   `score` (integer or text, optional)
+        *   `created_at` (timestampz)
+    *   `user_settings` (optional for theme persistence if not using localStorage):
+        *   `user_id` (PK, FK to `auth.users`, uuid)
+        *   `preferred_theme` (text)
+*   **APIs and Integrations:**
+    *   **Supabase API:** For authentication, database operations (CRUD on tables), and file storage.
+    *   **OpenAI API (GPT-4o):** For contextual explanations, quiz generation, and answer evaluation. Accessed securely through Supabase Edge Functions.
+    *   **PDF.js API:** For rendering and interacting with PDF documents within the browser.
+*   **Infrastructure Requirements:**
+    *   **Hosting:** Vercel (as per PRD, though current stack is Vite/React which also deploys well on Vercel/Netlify etc.).
+    *   **Supabase Project:** For database, auth, storage, and serverless functions.
+
+# Development Roadmap
+*   **MVP Requirements (Core Scope):**
+    1.  User authentication (email/password via Supabase).
+    2.  PDF book upload to Supabase Storage and listing in UI.
+    3.  PDF rendering using PDF.js with page navigation.
+    4.  Theme switching (White, Dark, Classical) with persistence.
+    5.  AI chat functionality: send page context and user prompt to OpenAI via Supabase Edge Function, display markdown response.
+    6.  AI quiz functionality: generate questions from page, allow user answers, AI evaluation and feedback via Supabase Edge Function.
+    7.  Basic three-panel dashboard UI.
+    8.  Storage of interactions (chat, quizzes) in Supabase tables.
+    9.  Ensure core success criteria are met (book opening speed, theme functionality, relevant AI responses, usability on desktop/tablet).
+*   **Future Enhancements (Post-MVP):**
+    *   Highlight and save quotes from books.
+    *   Manual note-taking functionality tied to book pages.
+    *   Reading streaks and progress tracking.
+    *   Support for other document formats (e.g., EPUB).
+    *   Advanced AI features (e.g., summarization of chapters, comparison across texts).
+    *   Social features (e.g., sharing insights, book clubs - if aligned with product vision).
+
+# Logical Dependency Chain
+1.  **Foundation:**
+    *   Set up Supabase project (Auth, DB, Storage).
+    *   Implement User Authentication (signup, login, session management).
+    *   Basic Dashboard Layout components.
+2.  **Core Reading Experience (Getting to Usable Frontend Quickly):**
+    *   Implement Book Upload functionality (UI and Supabase Storage integration).
+    *   Implement Book Listing in the navigation panel.
+    *   Integrate PDF.js for rendering selected books with page navigation.
+    *   Implement Theme Switching functionality.
+3.  **AI Features (Atomic, Built on Core):**
+    *   Develop Supabase Edge Function for OpenAI GPT-4o interaction (chat).
+    *   Implement AI Chat Panel UI and connect to the Edge Function.
+    *   Store chat interactions in Supabase.
+    *   Extend/develop Supabase Edge Function for quiz generation and evaluation.
+    *   Implement Quiz Panel UI and connect to the Edge Function.
+    *   Store quiz interactions in Supabase.
+4.  **Refinement & Testing:**
+    *   Thorough testing of all features against success criteria.
+    *   UI polish and responsiveness checks.
+    *   Error handling and user feedback mechanisms.
+
+# Risks and Mitigations
+*   **Technical Challenges:**
+    *   **Risk:** Complexity in seamlessly integrating PDF.js for optimal performance (lazy loading, page tracking) across various PDF structures.
+    *   **Mitigation:** Allocate sufficient time for PDF.js integration research and testing. Start with basic rendering and iteratively add features. Refer to PDF.js documentation and community examples.
+    *   **Risk:** Crafting effective and reliable prompts for OpenAI GPT-4o to ensure consistently high-quality contextual answers, quiz questions, and evaluations.
+    *   **Mitigation:** Iterative prompt engineering with extensive testing. Develop a suite of test cases with diverse content. Consider a system for users to provide feedback on AI response quality.
+*   **Figuring out the MVP that we can build upon:**
+    *   **Risk:** Scope creep or incorrect prioritization leading to an MVP that isn't truly minimal or viable.
+    *   **Mitigation:** This PRD defines the MVP. Strictly adhere to the defined MVP features. Regularly review progress against this PRD to prevent deviation. Postpone all non-essential features to "Future Enhancements."
+*   **Resource Constraints:**
+    *   **Risk:** Limited development time or personnel impacting the ability to deliver the MVP.
+    *   **Mitigation:** Prioritize features based on the logical dependency chain. Focus on delivering core functionality incrementally. Maintain clear communication on progress and any blockers.
+*   **External API Dependency:**
+    *   **Risk:** Issues with OpenAI API availability, rate limits, or cost overruns.
+    *   **Mitigation:** Implement robust error handling and retries for API calls. Monitor API usage and costs closely. Have a plan for handling API downtime (e.g., inform users, temporarily disable AI features).
+
+# Appendix
+*   **AI Prompting Strategy:**
+    *   A system prompt will be designed for OpenAI GPT-4o to guide its behavior. This prompt will instruct the AI to:
+        *   Provide contextual explanations based on the provided page text and user query.
+        *   Generate reflective questions related to the content.
+        *   Create relevant quiz questions based on the page text.
+        *   Evaluate user answers to quiz questions constructively.
+        *   Maintain a learning-friendly and encouraging tone.
+    *   The prompt will be refined iteratively based on testing and user feedback.
+*   **Success Criteria (Reiteration from PRD src/PRD.txt):**
+    *   Book opens in <5s.
+    *   Reading works on all themes (White, Dark, Classical).
+    *   Chat gives clear contextual answers.
+    *   Quizzes feel useful and relevant.
+    *   Works well on desktop & tablet.
+*   **Tech Stack (Reiteration from PRD src/PRD.txt):**
+    *   **Frontend:** Next.js + Tailwind CSS (Note: Current project structure provided earlier is Vite + React. This PRD section reflects `src/PRD.txt`. The implementation plan will adapt to the actual codebase if it remains Vite/React).
+    *   **PDF Viewer:** PDF.js
+    *   **Theme Switch:** Tailwind + Zustand or Context API
+    *   **DB + Auth:** Supabase (Postgres + Storage + Auth)
+    *   **AI Backend:** OpenAI GPT-4o
+    *   **Hosting:** Vercel 

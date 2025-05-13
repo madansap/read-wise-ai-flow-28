@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -9,17 +8,25 @@ import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
+import { useReading } from '@/contexts/ReadingContext';
 
 // Set up worker source for PDF.js
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 const ReadingPanel = () => {
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [totalPages, setTotalPages] = useState<number>(0);
+  // Use the ReadingContext
+  const { 
+    currentPage, setCurrentPage,
+    totalPages, setTotalPages,
+    currentPageText, setCurrentPageText,
+    isLoadingText, setIsLoadingText,
+    currentBookId, setCurrentBookId,
+    currentBookTitle, setCurrentBookTitle
+  } = useReading();
+  
   const [theme, setTheme] = useState<'light' | 'dark' | 'classic'>('light');
   const [selectedBook, setSelectedBook] = useState<any>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const [pageText, setPageText] = useState<string>('');
   const { user } = useAuth();
 
   // Load the current book from localStorage or fetch from database
@@ -42,6 +49,8 @@ const ReadingPanel = () => {
           if (error) throw error;
           if (data) {
             setSelectedBook(data);
+            setCurrentBookId(data.id);
+            setCurrentBookTitle(data.title);
             loadBook(data);
             
             // Restore reading position
@@ -52,12 +61,14 @@ const ReadingPanel = () => {
         } catch (error) {
           console.error('Error fetching book:', error);
           localStorage.removeItem('currentBookId');
+          setCurrentBookId(null);
+          setCurrentBookTitle(null);
         }
       }
     };
 
     fetchCurrentBook();
-  }, [user]);
+  }, [user, setCurrentPage, setCurrentBookId, setCurrentBookTitle]);
 
   // Save reading position when changing pages
   useEffect(() => {
@@ -100,6 +111,9 @@ const ReadingPanel = () => {
 
   const loadBook = async (book: any) => {
     if (!book || !book.file_path) return;
+    
+    setIsLoadingText(true);
+    setCurrentPageText('');
 
     try {
       const { data, error } = await supabase.storage
@@ -115,6 +129,7 @@ const ReadingPanel = () => {
         description: "Could not load the selected book",
         variant: "destructive",
       });
+      setIsLoadingText(false);
     }
   };
 
@@ -129,22 +144,36 @@ const ReadingPanel = () => {
   };
 
   const extractTextFromPage = async () => {
-    if (!pdfUrl) return;
+    if (!pdfUrl) {
+      setCurrentPageText('');
+      setIsLoadingText(false);
+      return;
+    }
+    
+    setIsLoadingText(true);
     
     try {
       const pdf = await pdfjs.getDocument(pdfUrl).promise;
       const page = await pdf.getPage(currentPage);
       const textContent = await page.getTextContent();
       const text = textContent.items.map((item: any) => item.str).join(' ');
-      setPageText(text);
+      setCurrentPageText(text);
     } catch (error) {
       console.error('Error extracting text:', error);
+      setCurrentPageText('');
+      toast({
+        title: "Error processing page",
+        description: "Could not extract text from the current page",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingText(false);
     }
   };
 
   // Extract text when page changes
   useEffect(() => {
-    if (pdfUrl) {
+    if (pdfUrl && currentPage > 0) {
       extractTextFromPage();
     }
   }, [currentPage, pdfUrl]);
@@ -166,7 +195,7 @@ const ReadingPanel = () => {
             <Button 
               variant="outline" 
               size="icon" 
-              disabled={currentPage <= 1}
+              disabled={currentPage <= 1 || isLoadingText}
               onClick={() => handlePageChange(currentPage - 1)}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -177,12 +206,19 @@ const ReadingPanel = () => {
             <Button 
               variant="outline" 
               size="icon" 
-              disabled={totalPages === 0 || currentPage >= totalPages}
+              disabled={totalPages === 0 || currentPage >= totalPages || isLoadingText}
               onClick={() => handlePageChange(currentPage + 1)}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
+          
+          {/* Show current book title */}
+          {currentBookTitle && (
+            <span className="ml-4 text-sm font-medium truncate max-w-[200px]">
+              {currentBookTitle}
+            </span>
+          )}
         </div>
 
         {/* Theme switch */}

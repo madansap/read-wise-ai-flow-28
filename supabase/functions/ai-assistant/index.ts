@@ -1,6 +1,13 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  chatSystemPrompt,
+  chatUserPromptTemplate,
+  quizSystemPrompt,
+  quizUserPromptTemplate,
+  quizEvalSystemPrompt,
+  quizEvalUserPromptTemplate
+} from "./prompts.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,14 +21,28 @@ serve(async (req) => {
   }
 
   try {
-    const { bookContent, userQuestion, conversationId, user, quizMode } = await req.json();
+    const requestBody = await req.json();
+    const { 
+      bookContent, 
+      userQuestion, 
+      conversationId, 
+      user, 
+      mode = "chat", // Default mode is chat
+      numQuestions = 3, // Default number of quiz questions
+      quizEvaluation = null // Quiz evaluation data 
+    } = requestBody;
 
-    if (!bookContent && !quizMode) {
+    // Validate required parameters
+    if (!bookContent && mode !== "quizEvaluation") {
       throw new Error("Book content is required");
     }
 
-    if (!userQuestion && !quizMode) {
-      throw new Error("Question is required");
+    if (mode === "chat" && !userQuestion) {
+      throw new Error("Question is required in chat mode");
+    }
+
+    if (mode === "quizEvaluation" && !quizEvaluation) {
+      throw new Error("Quiz evaluation data is required in quizEvaluation mode");
     }
 
     // Configure OpenAI
@@ -35,39 +56,43 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Generate appropriate system prompt based on mode
+    // Generate appropriate system prompt and user prompt based on mode
     let systemPrompt;
     let userPrompt;
+    let temperature = 0.3; // Default temperature
+    let model = "gpt-4o-mini"; // Default model
     
-    if (quizMode) {
-      systemPrompt = `You are an educational AI designed to create quiz questions about reading material.
-      Create engaging multiple-choice questions that test understanding of the provided text.
-      For each question, provide 4 answer options with exactly one correct answer.
-      Format your response as valid JSON that can be parsed with JSON.parse().
+    switch (mode) {
+      case "chat":
+        systemPrompt = chatSystemPrompt;
+        userPrompt = chatUserPromptTemplate(bookContent, userQuestion);
+        temperature = 0.3; // Analytical, precise responses
+        break;
       
-      The response should be an array of objects with the following structure:
-      [
-        {
-          "question": "The question text goes here?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correctIndex": 2  // Index of the correct option (0-3)
-        },
-        ...more questions
-      ]
+      case "quiz":
+        systemPrompt = quizSystemPrompt;
+        userPrompt = quizUserPromptTemplate(bookContent, numQuestions);
+        temperature = 0.7; // More creative for question generation
+        break;
       
-      Generate ${quizMode === 'short' ? '3' : '5'} questions that are challenging but fair.`;
+      case "quizEvaluation":
+        systemPrompt = quizEvalSystemPrompt;
+        const { question, options, correctIndex, userAnswerIndex } = quizEvaluation;
+        userPrompt = quizEvalUserPromptTemplate(
+          bookContent, 
+          question, 
+          options, 
+          correctIndex, 
+          userAnswerIndex
+        );
+        temperature = 0.4; // Balanced between creativity and accuracy
+        break;
       
-      userPrompt = `Here is the text content from the book to generate quiz questions about:\n\n${bookContent}`;
-    } else {
-      systemPrompt = `You are a helpful AI reading assistant. Your task is to answer questions about the text provided.
-      Base your answers only on the provided text and your general knowledge about books and reading.
-      If the answer cannot be found in the text, politely say so. Be concise but thorough in your explanations.
-      Format your answers using markdown for better readability.`;
-      
-      userPrompt = `Here is the text content from the book:\n\n${bookContent}\n\nQuestion: ${userQuestion}`;
+      default:
+        throw new Error(`Unsupported mode: ${mode}`);
     }
 
-    console.log("Calling OpenAI API...");
+    console.log(`Calling OpenAI API in ${mode} mode...`);
     
     // Call OpenAI API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -77,14 +102,14 @@ serve(async (req) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model, // Use the selected model
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt }
         ],
-        temperature: quizMode ? 0.7 : 0.3,
+        temperature,
       }),
-    }),
+    });
 
     if (!response.ok) {
       const errorData = await response.json();
@@ -96,8 +121,8 @@ serve(async (req) => {
     console.log("OpenAI API response received");
     const aiResponse = data.choices[0].message.content;
 
-    // If conversationId is provided and not in quiz mode, save the interaction to the database
-    if (conversationId && user && !quizMode) {
+    // If conversationId is provided and in chat mode, save the interaction to the database
+    if (conversationId && user && mode === "chat") {
       // Save user message
       await supabase.from("ai_messages").insert({
         conversation_id: conversationId,
@@ -115,7 +140,8 @@ serve(async (req) => {
 
     return new Response(
       JSON.stringify({ 
-        response: aiResponse 
+        response: aiResponse,
+        mode // Include the mode in the response for client-side handling
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

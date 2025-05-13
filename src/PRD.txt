@@ -1,0 +1,181 @@
+✅ MVP PRD – AI Reading Companion (v0.1)
+A lightweight but powerful prototype to test product viability
+
+1. 🎯 Core Objective
+Let users upload a book, read it seamlessly, ask the AI contextual questions, get quizzed, and receive intelligent evaluation — all within a clean and focused dashboard UI.
+
+2. ✅ Core Features (Updated)
+1. Upload & Store Books
+Upload PDF books (max 50MB)
+
+
+Supabase storage (per-user)
+
+
+Extract & store title/filename
+
+
+Appears in left sidebar
+
+
+
+2. Seamless Reading Experience
+Render full PDF using PDF.js with:
+
+
+Lazy loading for smooth performance
+
+
+Page-by-page navigation
+
+
+Track current page (for AI context & progress)
+
+
+🌓 Theme Support
+The reader can toggle between:
+
+
+White – clean, minimal (default)
+
+
+Dark – comfortable for night reading
+
+
+Classical – sepia background, serif font
+
+
+Persist theme using localStorage or Supabase profile
+
+
+
+3. Ask Questions to AI
+User enters prompt in chat (right panel)
+
+
+App sends:
+
+
+pageText or highlightedText
+
+
+userPrompt
+
+
+AI responds with:
+
+
+Insightful, markdown-formatted explanations
+
+
+
+4. Quiz & Evaluation
+“Quiz Me” tab generates:
+
+
+1–3 questions from the current page
+
+
+User answers interactively
+
+
+AI evaluates, gives feedback + suggestions
+
+
+All interactions saved in Supabase
+
+
+
+5. Dashboard UI (per screenshot)
+Left: Book library, Upload button
+
+
+Center: Reader (PDF)
+
+
+Right: AI Assistant (Chat + Quiz)
+
+
+Quick prompt buttons below chat
+
+
+
+3. 🔐 Authentication
+Supabase Auth (email/password)
+
+
+Each user’s books & chats private
+
+
+
+4. 🧠 AI Prompting
+Use system prompt (as shared earlier) that handles:
+Contextual explanation
+
+
+Reflective questions
+
+
+Quiz generation + evaluation
+
+
+Learning-friendly tone
+
+
+
+5. 🧑‍💻 Tech Stack
+Layer
+Tech
+Frontend
+Next.js + Tailwind CSS
+PDF Viewer
+PDF.js
+Theme Switch
+Tailwind + Zustand or Context API
+DB + Auth
+Supabase (Postgres + Storage + Auth)
+AI Backend
+OpenAI GPT-4o
+Hosting
+Vercel
+
+
+6. 🧩 Data Models
+books
+ id, user_id, title, filename, created_at
+interactions
+ id, user_id, book_id, page_number, type, user_input, ai_response, created_at
+quizzes
+ id, interaction_id, question, user_answer, ai_feedback, score
+user_settings (optional for theme)
+ user_id, preferred_theme
+
+7. 🧪 Success Criteria
+Book opens in <5s
+
+
+Reading works on all themes
+
+
+Chat gives clear contextual answers
+
+
+Quizzes feel useful and relevant
+
+
+Works well on desktop & tablet
+
+
+
+8. 📦 Stretch After MVP
+Highlight & save quotes
+
+
+Manual notes
+
+
+Reading streaks
+
+
+
+
