@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -60,6 +60,9 @@ const AIAssistantPanel = () => {
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+
+  // Add ref for messages container
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Get or create conversation when book changes
   useEffect(() => {
@@ -350,6 +353,11 @@ const AIAssistantPanel = () => {
     setUserInput(prompt);
   };
 
+  // Scroll to bottom whenever messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, sendMessageMutation.isPending]);
+
   return (
     <div className="h-full flex flex-col">
       <Tabs 
@@ -370,17 +378,9 @@ const AIAssistantPanel = () => {
           </TabsList>
         </div>
         
-        <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden">
+        <TabsContent value="chat" className="flex-1 flex flex-col overflow-hidden relative">
           {/* Messages container with auto-scroll */}
-          <div 
-            className="flex-1 overflow-y-auto px-3 py-4 space-y-4"
-            ref={(el) => {
-              // Auto-scroll to bottom when new messages arrive
-              if (el && messages.length > 0) {
-                el.scrollTop = el.scrollHeight;
-              }
-            }}
-          >
+          <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4 pb-[130px]">
             {messagesLoading ? (
               <div className="flex justify-center items-center h-20">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
@@ -439,59 +439,64 @@ const AIAssistantPanel = () => {
                 </div>
               </div>
             )}
+            {/* Invisible element to scroll to */}
+            <div ref={messagesEndRef} />
           </div>
           
-          {/* Quick prompts */}
-          <div className="px-3 grid grid-cols-1 sm:grid-cols-2 gap-2 my-2">
-            {QUICK_PROMPTS.map((prompt, index) => (
-              <Button 
-                key={index} 
-                variant="outline" 
-                size="sm"
-                className="flex items-center justify-start overflow-hidden"
-                onClick={() => handleQuickPrompt(prompt.text)}
-                disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
-              >
-                {prompt.icon}
-                <span className="truncate">{prompt.text}</span>
-              </Button>
-            ))}
-          </div>
-          
-          {/* Input area */}
-          <div className="px-3 pb-3 pt-1">
-            <div className="flex space-x-2">
-              <Input
-                value={userInput}
-                onChange={(e) => setUserInput(e.target.value)}
-                onKeyDown={handleKeyPress}
-                placeholder={
-                  isLoadingText 
-                    ? "Loading page content..." 
-                    : currentPageText 
-                      ? "Ask about this page..." 
-                      : "Select a book to start"
-                }
-                disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
-                className="flex-1"
-              />
-              <Button 
-                onClick={handleSendMessage} 
-                disabled={!userInput.trim() || !currentPageText || isLoadingText || sendMessageMutation.isPending}
-                aria-label="Send message"
-              >
-                {sendMessageMutation.isPending ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </Button>
+          {/* Fixed bottom input area */}
+          <div className="absolute bottom-0 left-0 right-0 bg-background border-t z-10">
+            {/* Quick prompts */}
+            <div className="px-3 grid grid-cols-1 sm:grid-cols-2 gap-2 my-2">
+              {QUICK_PROMPTS.map((prompt, index) => (
+                <Button 
+                  key={index} 
+                  variant="outline" 
+                  size="sm"
+                  className="flex items-center justify-start overflow-hidden"
+                  onClick={() => handleQuickPrompt(prompt.text)}
+                  disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
+                >
+                  {prompt.icon}
+                  <span className="truncate">{prompt.text}</span>
+                </Button>
+              ))}
             </div>
-            {currentPage > 0 && currentBookTitle && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                Answering based on: {currentBookTitle}, Page {currentPage}
+            
+            {/* Input area */}
+            <div className="px-3 pb-3 pt-1">
+              <div className="flex space-x-2">
+                <Input
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  onKeyDown={handleKeyPress}
+                  placeholder={
+                    isLoadingText 
+                      ? "Loading page content..." 
+                      : currentPageText 
+                        ? "Ask about this page..." 
+                        : "Select a book to start"
+                  }
+                  disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
+                  className="flex-1"
+                />
+                <Button 
+                  onClick={handleSendMessage} 
+                  disabled={!userInput.trim() || !currentPageText || isLoadingText || sendMessageMutation.isPending}
+                  aria-label="Send message"
+                >
+                  {sendMessageMutation.isPending ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
-            )}
+              {currentPage > 0 && currentBookTitle && (
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Answering based on: {currentBookTitle}, Page {currentPage}
+                </div>
+              )}
+            </div>
           </div>
         </TabsContent>
         
