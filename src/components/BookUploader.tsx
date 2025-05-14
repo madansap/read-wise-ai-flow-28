@@ -110,11 +110,11 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       let insertAttempts = 0;
       const maxInsertAttempts = 2;
       let bookId = null;
-      let insertError = null;
+      let currentInsertError = null;
       
       while (insertAttempts < maxInsertAttempts) {
         try {
-          const { data, error: insertError } = await supabase
+          const { data, error } = await supabase
             .from('books')
             .insert({
               title: metadata.title,
@@ -128,12 +128,12 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             .select('id')
             .single();
           
-          if (insertError) {
-            insertError = insertError;
+          if (error) {
+            currentInsertError = error;
             insertAttempts++;
           } else {
             bookId = data.id;
-            insertError = null;
+            currentInsertError = null;
             break; // Success, exit loop
           }
           
@@ -141,7 +141,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         } catch (err) {
-          insertError = err;
+          currentInsertError = err;
           insertAttempts++;
           console.error(`Book metadata insert attempt ${insertAttempts} error:`, err);
           
@@ -151,7 +151,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
         }
       }
       
-      if (insertError || !bookId) throw insertError || new Error("Failed to insert book metadata");
+      if (currentInsertError || !bookId) throw currentInsertError || new Error("Failed to insert book metadata");
       
       // Step 3: Trigger the PDF processing function with more robust retry logic
       toast({
