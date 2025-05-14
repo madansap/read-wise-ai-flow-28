@@ -194,14 +194,23 @@ const AIAssistantPanel = () => {
         })
         .eq('id', currentBookId);
       
+      // Prepare parameters that need to be sent
+      const processingParams = {
+        book_id: currentBookId,
+        user_id: user.id,
+        file_path: bookDetails.file_path,
+        endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
+      };
+      
+      console.log("Sending processing request with params:", {
+        bookId: currentBookId,
+        userId: user.id,
+        filePath: bookDetails.file_path
+      });
+      
       // Trigger processing function with the endpoint parameter
-      const { error: processingError } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          book_id: currentBookId,
-          user_id: user.id,
-          file_path: bookDetails.file_path,
-          endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
-        }
+      const { data, error: processingError } = await supabase.functions.invoke('ai-assistant', {
+        body: processingParams
       });
       
       if (processingError) {
@@ -214,19 +223,19 @@ const AIAssistantPanel = () => {
       });
       
       // Refresh book details to show updated status
-      const { data } = await supabase
+      const { data: updatedBookData } = await supabase
         .from('books')
         .select('*')
         .eq('id', currentBookId)
         .single();
         
-      setBookDetails(data);
+      setBookDetails(updatedBookData);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error processing book:', error);
       toast({
         title: "Processing Failed",
-        description: error.message || "An unexpected error occurred",
+        description: error.message || "An unexpected error occurred. Please check that your API keys are correctly set.",
         variant: "destructive",
       });
     } finally {
@@ -548,7 +557,7 @@ const AIAssistantPanel = () => {
                 <h3 className="font-medium mb-1">Ask about your book</h3>
                 <p className="text-sm">
                   {isLoadingText 
-                    ? "Loading page content..."
+                    ? "Loading page content..." 
                     : currentPageText 
                       ? "Ask any question about the current page." 
                       : "No page content available. Please select a book."}

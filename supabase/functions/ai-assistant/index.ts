@@ -126,7 +126,7 @@ async function processPdf(
   bookId: string,
   userId: string,
   supabase: any,
-  googleApiKey: string
+  apiKey: string
 ): Promise<{ success: boolean; pages: number; chunks: number; message?: string }> {
   try {
     // Load the PDF data
@@ -299,7 +299,7 @@ async function processPdf(
                   
                   chunkPromises.push((async () => {
                     try {
-                      const embedding = await getEmbedding(chunk, googleApiKey);
+                      const embedding = await getEmbedding(chunk, apiKey);
                       
                       return supabase.from('book_chunks').insert({
                         book_id: bookId,
@@ -315,7 +315,7 @@ async function processPdf(
                       await new Promise(resolve => setTimeout(resolve, 2000));
                       
                       try {
-                        const embedding = await getEmbedding(chunk, googleApiKey);
+                        const embedding = await getEmbedding(chunk, apiKey);
                       
                         return supabase.from('book_chunks').insert({
                           book_id: bookId,
@@ -425,14 +425,14 @@ async function findRelevantChunks(
   bookId: string,
   pageNumber: number | null,
   supabase: any, 
-  googleApiKey: string,
+  apiKey: string,
   limit: number = MAX_CONTEXT_CHUNKS
 ): Promise<string> {
   try {
     console.log("Finding relevant chunks for query:", query);
     
     // Get embedding for the query
-    const queryEmbedding = await getEmbedding(query, googleApiKey);
+    const queryEmbedding = await getEmbedding(query, apiKey);
     
     // Search for relevant chunks using vector similarity
     const { data: chunks, error } = await supabase
@@ -544,16 +544,33 @@ serve(async (req) => {
     // Get necessary environment variables
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    const googleApiKey = Deno.env.get("OPENAI_API_KEY") || "";
     
-    if (!googleApiKey) {
-      throw new Error("Missing API key");
+    // Use OPENAI_API_KEY for OpenAI calls, GOOGLE_API_KEY for embedding operations
+    const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
+    const googleApiKey = Deno.env.get("GOOGLE_API_KEY") || openaiApiKey; // Fallback to OpenAI key if Google key not set
+    
+    if (!openaiApiKey) {
+      throw new Error("Missing OpenAI API key");
     }
 
     // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
     // Parse request body
+    let requestBody;
+    try {
+      requestBody = await req.json();
+    } catch (parseError) {
+      console.error("Error parsing request body:", parseError);
+      return new Response(
+        JSON.stringify({ 
+          error: "Invalid JSON in request body", 
+          success: false 
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
     const { 
       bookContent, 
       userQuestion, 
@@ -565,16 +582,47 @@ serve(async (req) => {
       endpoint,
       file_path,
       user_id
-    } = await req.json();
+    } = requestBody;
+    
+    console.log("Request received:", {
+      mode,
+      endpoint,
+      bookId: bookId || "not provided",
+      pageNumber: pageNumber || "not provided",
+      userId: user_id || (user?.id) || "not provided"
+    });
 
     // Handle book processing endpoint
     if (endpoint === 'extract-pdf-text') {
       console.log("Processing book:", bookId);
       
-      if (!bookId || !user_id || !file_path) {
+      if (!bookId) {
+        console.error("Missing book_id in request");
         return new Response(
           JSON.stringify({ 
-            error: "Missing required fields for book processing", 
+            error: "Missing book_id for book processing", 
+            success: false 
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      if (!user_id) {
+        console.error("Missing user_id in request");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing user_id for book processing", 
+            success: false 
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      if (!file_path) {
+        console.error("Missing file_path in request");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing file_path for book processing", 
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -633,6 +681,19 @@ serve(async (req) => {
       throw new Error("User question is required for chat mode");
     }
     
+    // Check for valid mode
+    const validModes = ["chat", "quiz", "quizEvaluation"];
+    if (!validModes.includes(mode)) {
+      console.error(`Unsupported mode: ${mode}`);
+      return new Response(
+        JSON.stringify({ 
+          error: `Unsupported mode: ${mode}. Valid modes are: ${validModes.join(", ")}`, 
+          success: false 
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
     // Variables for context
     let contextText = "";
     let usedRag = false;
@@ -672,6 +733,7 @@ serve(async (req) => {
         // Add page number context to the system prompt
         const pageContext = pageNumber ? `The user is currently viewing page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
         const enhancedSystemPrompt = systemPrompt + (pageContext ? `\n\n${pageContext}` : '');
+        systemPrompt = enhancedSystemPrompt;
         
         // Create user prompt
         if (contextText) {
@@ -698,15 +760,21 @@ Ensure each question has a clear correct answer that can be found in or directly
         systemPrompt = quizEvalSystemPrompt;
         
         // This should extract these from the request body
-        const { question, options, correctIndex, userAnswerIndex } = req.body?.quizEvaluation || {};
+        const quizData = requestBody?.quizEvaluation || {};
+        const { question, options, correctIndex, userAnswerIndex } = quizData;
         
-        userPrompt = quizEvalUserPromptTemplate(
-          bookContent, 
-          question, 
-          options, 
-          correctIndex, 
-          userAnswerIndex
-        );
+        if (!question || !options || correctIndex === undefined || userAnswerIndex === undefined) {
+          console.error("Missing quiz evaluation data:", quizData);
+          return new Response(
+            JSON.stringify({ 
+              error: "Missing quiz evaluation data. Need question, options, correctIndex, and userAnswerIndex.", 
+              success: false 
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        userPrompt = `Question: ${question}\n\nOptions:\n${options.map((opt: string, i: number) => `${String.fromCharCode(65 + i)}. ${opt}`).join('\n')}\n\nCorrect Answer: ${String.fromCharCode(65 + correctIndex)} (${options[correctIndex]})\nUser's Answer: ${String.fromCharCode(65 + userAnswerIndex)} (${options[userAnswerIndex]})\n\nText Content:\n"""${bookContent}"""\n\n${userAnswerIndex === correctIndex ? "The answer is CORRECT. " : "The answer is INCORRECT. "}Please provide detailed feedback on the user's answer.`;
         
         // Add page reference
         if (pageNumber) {
@@ -722,7 +790,7 @@ Ensure each question has a clear correct answer that can be found in or directly
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${googleApiKey}`,
+        "Authorization": `Bearer ${openaiApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

@@ -173,14 +173,23 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
               await new Promise(resolve => setTimeout(resolve, 1000));
             }
             
+            // Prepare all required params explicitly
+            const processingParams = {
+              book_id: bookId,
+              user_id: user.id,
+              file_path: filePath,
+              endpoint: 'extract-pdf-text' // Add endpoint information in the body
+            };
+            
+            console.log("Sending processing request with params:", {
+              bookId,
+              userId: user.id,
+              filePath
+            });
+            
             // Call the extract-pdf-text endpoint with the endpoint parameter in the body
             const response = await supabase.functions.invoke('ai-assistant', {
-              body: {
-                book_id: bookId,
-                user_id: user.id,
-                file_path: filePath,
-                endpoint: 'extract-pdf-text' // Add endpoint information in the body
-              }
+              body: processingParams
             });
             
             if (response.error) {
@@ -197,7 +206,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             console.log('Book processing initiated successfully:', response.data);
             processingError = null;
             break; // Success, exit retry loop
-          } catch (error) {
+          } catch (error: any) {
             processingError = error;
             console.error(`Error triggering PDF processing (attempt ${retryCount + 1}):`, error);
             retryCount++;
