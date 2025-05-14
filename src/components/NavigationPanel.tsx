@@ -32,6 +32,8 @@ const NavigationPanel = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedBookId, setSelectedBookId] = useState<string | null>(null);
   const { user, signOut } = useAuth();
+  const [isProcessingBook, setIsProcessingBook] = useState(false);
+  const [bookDetails, setBookDetails] = useState<Book | null>(null);
 
   // Declare fetchBooks outside of useEffect
   const fetchBooks = useCallback(async () => {
@@ -231,6 +233,8 @@ const NavigationPanel = () => {
   // Add a new function to manually process a book
   const processBook = async (bookId: string) => {
     try {
+      setIsProcessingBook(true);
+      
       // Get book details
       const { data: book, error: bookError } = await supabase
         .from('books')
@@ -249,17 +253,82 @@ const NavigationPanel = () => {
         })
         .eq('id', bookId);
       
-      // Trigger processing function
-      const { error: processingError } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          book_id: bookId,
-          user_id: user?.id,
-          file_path: book.file_path
+      // Add improved retry logic for more reliable processing
+      let retryCount = 0;
+      const maxRetries = 3;
+      let processingError;
+      
+      while (retryCount <= maxRetries) {
+        try {
+          console.log(`Attempting to process book (attempt ${retryCount + 1}/${maxRetries + 1})`);
+          
+          // Small delay to ensure DB consistency
+          if (retryCount === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          
+          // Trigger processing function with the endpoint parameter
+          const response = await supabase.functions.invoke('ai-assistant', {
+            body: {
+              book_id: bookId,
+              user_id: user?.id,
+              file_path: book.file_path,
+              endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
+            }
+          });
+          
+          if (response.error) {
+            throw new Error(response.error.message || "Function invocation failed");
+          }
+          
+          // Check for success field in the response data
+          if (!response.data || response.data.success === false) {
+            const errorMessage = response.data?.message || response.data?.error || "Unknown processing error";
+            console.error('Processing error from Edge Function:', errorMessage);
+            throw new Error(errorMessage);
+          }
+          
+          console.log('Processing initiated successfully:', response.data);
+          processingError = null;
+          break; // Success, exit retry loop
+        } catch (error: any) {
+          processingError = error;
+          console.error(`Error triggering PDF processing (attempt ${retryCount + 1}):`, error);
+          
+          // Check for specific error that might indicate a PDF parsing issue
+          if (error.message && (
+            error.message.includes("PDF parsing failed") || 
+            error.message.includes("PDF processing failed"))
+          ) {
+            console.error("PDF parsing error detected, may need different approach:", error);
+            retryCount += 2; // Skip ahead in retries since this is likely a content issue
+          } else {
+            retryCount++;
+          }
+          
+          if (retryCount <= maxRetries) {
+            // Wait before retrying with exponential backoff (2s, 4s, 8s)
+            const backoffDelay = 2000 * Math.pow(2, retryCount - 1);
+            console.log(`Waiting ${backoffDelay}ms before next attempt...`);
+            await new Promise(resolve => setTimeout(resolve, backoffDelay));
+          }
         }
-      });
+      }
       
       if (processingError) {
-        throw processingError;
+        // Try to get more detailed error from the book status
+        const { data: updatedBook } = await supabase
+          .from('books')
+          .select('processing_status')
+          .eq('id', bookId)
+          .single();
+        
+        let errorMessage = processingError.message || "Unknown error";
+        if (updatedBook?.processing_status?.includes("Error:")) {
+          errorMessage = updatedBook.processing_status;
+        }
+        
+        throw new Error(errorMessage);
       }
       
       toast({
@@ -267,13 +336,38 @@ const NavigationPanel = () => {
         description: "Book processing has been initiated. This may take a few minutes.",
       });
       
+      // Refresh book details to show updated status
+      const { data } = await supabase
+        .from('books')
+        .select('*')
+        .eq('id', bookId)
+        .single();
+        
+      setBookDetails(data);
+      
     } catch (error: any) {
       console.error('Error processing book:', error);
+      
+      // Make sure the book status is updated even if there's an error
+      try {
+        await supabase
+          .from('books')
+          .update({ 
+            is_processed: false,
+            processing_status: `Error: ${error.message || "Unknown error"}` 
+          })
+          .eq('id', bookId);
+      } catch (statusError) {
+        console.error('Failed to update book status:', statusError);
+      }
+      
       toast({
         title: "Processing Failed",
         description: error.message || "An unexpected error occurred",
         variant: "destructive",
       });
+    } finally {
+      setIsProcessingBook(false);
     }
   };
 

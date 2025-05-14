@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MessageSquare, Send, BookOpen, Zap, Lightbulb, Search, HelpCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { MessageSquare, Send, BookOpen, Zap, Lightbulb, Search, HelpCircle, ChevronLeft, ChevronRight, AlertTriangle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/components/ui/use-toast";
@@ -33,6 +33,16 @@ type QuizQuestion = {
   feedback?: string;
 };
 
+type Book = {
+  id: string;
+  title: string;
+  author: string | null;
+  cover_image: string | null;
+  is_processed?: boolean;
+  processing_status?: string | null;
+  file_path?: string;
+};
+
 const QUICK_PROMPTS = [
   { text: "Explain this page", icon: <Lightbulb className="h-4 w-4 mr-2" /> },
   { text: "Summarize the key points", icon: <Search className="h-4 w-4 mr-2" /> },
@@ -60,6 +70,8 @@ const AIAssistantPanel = () => {
   const [quizSubmitted, setQuizSubmitted] = useState(false);
   const [isGeneratingQuiz, setIsGeneratingQuiz] = useState(false);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [isProcessingBook, setIsProcessingBook] = useState(false);
+  const [bookDetails, setBookDetails] = useState<Book | null>(null);
 
   // Add ref for messages container
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -125,6 +137,102 @@ const AIAssistantPanel = () => {
     },
     enabled: !!currentConversationId,
   });
+
+  // Get book details and processing status
+  useEffect(() => {
+    const fetchBookDetails = async () => {
+      if (!currentBookId) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('books')
+          .select('*')
+          .eq('id', currentBookId)
+          .single();
+          
+        if (error) throw error;
+        setBookDetails(data);
+      } catch (error) {
+        console.error("Error fetching book details:", error);
+      }
+    };
+    
+    fetchBookDetails();
+    
+    // Poll for updates if the book is being processed
+    let intervalId: number | null = null;
+    
+    if (currentBookId && bookDetails && bookDetails.processing_status?.includes('Processing')) {
+      intervalId = window.setInterval(fetchBookDetails, 5000); // Check every 5 seconds
+    }
+    
+    return () => {
+      if (intervalId !== null) window.clearInterval(intervalId);
+    };
+  }, [currentBookId, bookDetails?.processing_status]);
+
+  // Handle manual book processing
+  const processBook = async () => {
+    if (!currentBookId || !user || !bookDetails?.file_path) {
+      toast({
+        title: "Missing required information",
+        description: "Can't process the book at this time",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    setIsProcessingBook(true);
+    
+    try {
+      // Update status to indicate processing is starting
+      await supabase
+        .from('books')
+        .update({ 
+          is_processed: false,
+          processing_status: 'Queued for processing' 
+        })
+        .eq('id', currentBookId);
+      
+      // Trigger processing function with the endpoint parameter
+      const { error: processingError } = await supabase.functions.invoke('ai-assistant', {
+        body: {
+          book_id: currentBookId,
+          user_id: user.id,
+          file_path: bookDetails.file_path,
+          endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
+        }
+      });
+      
+      if (processingError) {
+        throw processingError;
+      }
+      
+      toast({
+        title: "Processing Started",
+        description: "Book processing has been initiated. This may take a few minutes.",
+      });
+      
+      // Refresh book details to show updated status
+      const { data } = await supabase
+        .from('books')
+        .select('*')
+        .eq('id', currentBookId)
+        .single();
+        
+      setBookDetails(data);
+      
+    } catch (error: any) {
+      console.error('Error processing book:', error);
+      toast({
+        title: "Processing Failed",
+        description: error.message || "An unexpected error occurred",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessingBook(false);
+    }
+  };
 
   // Send message mutation
   const sendMessageMutation = useMutation({
@@ -399,6 +507,34 @@ const AIAssistantPanel = () => {
           </TabsList>
         </div>
         
+        {/* Show book processing status or prompt */}
+        {!bookDetails?.is_processed && (
+          <div className="mx-4 mt-3 mb-0 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-md p-3">
+            <div className="flex items-start">
+              <AlertTriangle className="h-5 w-5 text-amber-500 mr-2 flex-shrink-0 mt-0.5" />
+              <div className="flex-grow">
+                <h4 className="font-semibold text-sm mb-1">Book needs processing</h4>
+                <p className="text-sm text-muted-foreground mb-2">
+                  {bookDetails?.processing_status?.includes('Processing') 
+                    ? `Processing in progress: ${bookDetails.processing_status}`
+                    : "This book needs to be processed for AI chat and quiz features to work properly."}
+                </p>
+                {!bookDetails?.processing_status?.includes('Processing') && (
+                  <Button 
+                    size="sm" 
+                    onClick={processBook}
+                    disabled={isProcessingBook}
+                    className="bg-amber-500 hover:bg-amber-600 text-white"
+                  >
+                    <Zap className="h-4 w-4 mr-2" />
+                    {isProcessingBook ? "Processing..." : "Process Book Now"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+        
         <TabsContent value="chat" className="flex-1 flex flex-col h-full">
           {/* Messages area - flex-grow to fill available space */}
           <div className="flex-grow overflow-y-auto px-3 pt-4 pb-2">
@@ -420,7 +556,7 @@ const AIAssistantPanel = () => {
               </div>
             ) : (
               <div className="space-y-4">
-                {messages.map((msg, index) => (
+                {messages.map((msg) => (
                   <div
                     key={msg.id}
                     className={`flex ${

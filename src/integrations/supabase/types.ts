@@ -100,6 +100,8 @@ export type Database = {
           total_pages: number | null
           updated_at: string
           user_id: string
+          is_processed: boolean | null
+          processing_status: string | null
         }
         Insert: {
           author?: string | null
@@ -114,6 +116,8 @@ export type Database = {
           total_pages?: number | null
           updated_at?: string
           user_id: string
+          is_processed?: boolean | null
+          processing_status?: string | null
         }
         Update: {
           author?: string | null
@@ -128,6 +132,8 @@ export type Database = {
           total_pages?: number | null
           updated_at?: string
           user_id?: string
+          is_processed?: boolean | null
+          processing_status?: string | null
         }
         Relationships: []
       }
