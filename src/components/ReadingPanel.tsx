@@ -44,6 +44,7 @@ const ReadingPanel = () => {
   const [isDocumentLoaded, setIsDocumentLoaded] = useState(false);
   const [isDocumentLoading, setIsDocumentLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState(0);
 
   // Reference to the container for additional event listeners
   const containerRef = useRef<HTMLDivElement>(null);
@@ -172,15 +173,19 @@ const ReadingPanel = () => {
     
     setIsLoadingText(true);
     setCurrentPageText('');
-    setRenderTextLayer(false); // Disable text layer initially
+    setPdfDocument(null);
     setPdfError(null);
     setIsDocumentLoaded(false);
     setIsDocumentLoading(true);
+    setRenderTextLayer(false); // Disable text layer initially
+    setLoadingProgress(0);
     
-    // Clear any existing PDF document
-    setPdfDocument(null);
-
     try {
+      // Clean up any existing PDF URL to avoid caching issues
+      if (pdfUrl) {
+        URL.revokeObjectURL(pdfUrl);
+      }
+      
       const { data, error } = await supabase.storage
         .from('books')
         .createSignedUrl(book.file_path, 3600); // 1 hour expiry
@@ -200,12 +205,18 @@ const ReadingPanel = () => {
     }
   };
 
+  const handleDocumentLoadProgress = ({ loaded, total }: { loaded: number, total: number }) => {
+    const progress = Math.min(100, Math.round(loaded / total * 100));
+    setLoadingProgress(progress);
+  };
+
   const handleDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setTotalPages(numPages);
     setIsDocumentLoaded(true);
     setIsDocumentLoading(false);
+    setLoadingProgress(100);
     
-    // Only enable text layer after ensuring document is fully loaded
+    // Enable text layer after ensuring document is fully loaded
     setTimeout(() => {
       setRenderTextLayer(true);
     }, 1000);
@@ -300,7 +311,12 @@ const ReadingPanel = () => {
     try {
       if (!pdfDocument) {
         // Load the document
-        const loadingTask = pdfjs.getDocument(pdfUrl);
+        const loadingTask = pdfjs.getDocument({
+          url: pdfUrl,
+          cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
+          cMapPacked: true
+        });
+        
         loadingTask.onProgress = (progressData) => {
           console.log(`Loading PDF: ${Math.round(progressData.loaded / progressData.total * 100)}%`);
         };
@@ -309,20 +325,30 @@ const ReadingPanel = () => {
         setPdfDocument(pdf);
         
         try {
+          // First ensure page number is valid
+          if (currentPage < 1 || currentPage > pdf.numPages) {
+            throw new Error(`Invalid page number: ${currentPage}`);
+          }
+          
           const page = await pdf.getPage(currentPage);
           const textContent = await page.getTextContent();
           const text = textContent.items.map((item: any) => item.str).join(' ');
-          setCurrentPageText(text);
+          setCurrentPageText(text || `[Page ${currentPage} contains no extractable text]`);
         } catch (pageError) {
           console.error('Error getting page text:', pageError);
           setCurrentPageText(`[Unable to extract text from page ${currentPage}]`);
         }
       } else {
         try {
+          // First ensure page number is valid
+          if (currentPage < 1 || currentPage > pdfDocument.numPages) {
+            throw new Error(`Invalid page number: ${currentPage}`);
+          }
+          
           const page = await pdfDocument.getPage(currentPage);
           const textContent = await page.getTextContent();
           const text = textContent.items.map((item: any) => item.str).join(' ');
-          setCurrentPageText(text);
+          setCurrentPageText(text || `[Page ${currentPage} contains no extractable text]`);
         } catch (pageError) {
           console.error('Error getting page text:', pageError);
           setCurrentPageText(`[Unable to extract text from page ${currentPage}]`);
@@ -406,8 +432,13 @@ const ReadingPanel = () => {
           <div id="pdf-container" className="flex justify-center">
             {isDocumentLoading && !isDocumentLoaded && !pdfError && (
               <div className="flex flex-col justify-center items-center h-64 mt-8">
-                <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mb-4"></div>
-                <p className="text-muted-foreground">Loading document...</p>
+                <div className="w-48 h-3 bg-gray-200 rounded-full overflow-hidden mb-2">
+                  <div 
+                    className="h-full bg-primary transition-all duration-300 ease-in-out" 
+                    style={{ width: `${loadingProgress}%` }}
+                  ></div>
+                </div>
+                <p className="text-muted-foreground">Loading document... {loadingProgress}%</p>
               </div>
             )}
             
@@ -431,6 +462,7 @@ const ReadingPanel = () => {
                 file={pdfUrl}
                 onLoadSuccess={handleDocumentLoadSuccess}
                 onLoadError={handleDocumentLoadError}
+                onLoadProgress={handleDocumentLoadProgress}
                 loading={
                   <div className="flex justify-center items-center h-full">
                     <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-primary"></div>
@@ -444,7 +476,10 @@ const ReadingPanel = () => {
                 options={{
                   cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
                   cMapPacked: true,
+                  disableAutoFetch: false,
+                  disableStream: false,
                 }}
+                externalLinkTarget="_blank"
               >
                 {isDocumentLoaded && Array.from(new Array(totalPages), (_, index) => (
                   <div key={`page_${index + 1}`} id={`page_${index + 1}`} className="mb-8" onMouseUp={onMouseUp}>
@@ -457,6 +492,7 @@ const ReadingPanel = () => {
                         pageNumber={index + 1}
                         renderTextLayer={renderTextLayer}
                         renderAnnotationLayer={false}
+                        renderStructTree={false} 
                         className={`border shadow-sm mx-auto ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
                         onLoadSuccess={() => {
                           if (index + 1 === currentPage) {
@@ -469,6 +505,11 @@ const ReadingPanel = () => {
                         width={Math.min(window.innerWidth * 0.9, 800)}
                         height={null}
                         data-page-number={index + 1}
+                        error={
+                          <div className="flex justify-center items-center p-4 border border-red-300 bg-red-50 text-red-700 rounded">
+                            <p>Error loading page {index + 1}</p>
+                          </div>
+                        }
                       />
                     </div>
                   </div>
