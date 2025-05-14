@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -492,7 +491,6 @@ const ReadingPanel = () => {
                         pageNumber={index + 1}
                         renderTextLayer={renderTextLayer}
                         renderAnnotationLayer={false}
-                        renderStructTree={false} 
                         className={`border shadow-sm mx-auto ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
                         onLoadSuccess={() => {
                           if (index + 1 === currentPage) {
