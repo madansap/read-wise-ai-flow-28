@@ -560,6 +560,7 @@ serve(async (req) => {
     let requestBody;
     try {
       requestBody = await req.json();
+      console.log("Request body received:", JSON.stringify(requestBody));
     } catch (parseError) {
       console.error("Error parsing request body:", parseError);
       return new Response(
@@ -581,22 +582,26 @@ serve(async (req) => {
       pageNumber,
       endpoint,
       file_path,
-      user_id
+      user_id,
+      book_id
     } = requestBody;
+    
+    const effectiveBookId = bookId || book_id;
+    const effectiveUserId = user_id || (user?.id);
     
     console.log("Request received:", {
       mode,
       endpoint,
-      bookId: bookId || "not provided",
+      bookId: effectiveBookId || "not provided",
       pageNumber: pageNumber || "not provided",
-      userId: user_id || (user?.id) || "not provided"
+      userId: effectiveUserId || "not provided"
     });
 
     // Handle book processing endpoint
     if (endpoint === 'extract-pdf-text') {
-      console.log("Processing book:", bookId);
+      console.log("Processing book:", effectiveBookId);
       
-      if (!bookId) {
+      if (!effectiveBookId) {
         console.error("Missing book_id in request");
         return new Response(
           JSON.stringify({ 
@@ -607,7 +612,7 @@ serve(async (req) => {
         );
       }
       
-      if (!user_id) {
+      if (!effectiveUserId) {
         console.error("Missing user_id in request");
         return new Response(
           JSON.stringify({ 
@@ -636,7 +641,7 @@ serve(async (req) => {
           is_processed: false,
           processing_status: 'Downloading PDF...' 
         })
-        .eq('id', bookId);
+        .eq('id', effectiveBookId);
       
       // Download the PDF from storage
       const { data, error } = await supabase.storage.from('books').download(file_path);
@@ -650,7 +655,7 @@ serve(async (req) => {
             is_processed: false,
             processing_status: `Error: Failed to download PDF: ${error?.message || 'Unknown error'}` 
           })
-          .eq('id', bookId);
+          .eq('id', effectiveBookId);
         
         return new Response(
           JSON.stringify({ 
@@ -663,7 +668,7 @@ serve(async (req) => {
       
       // Process the PDF
       const pdfBytes = await data.arrayBuffer();
-      const result = await processPdf(pdfBytes, bookId, user_id, supabase, googleApiKey);
+      const result = await processPdf(pdfBytes, effectiveBookId, effectiveUserId, supabase, googleApiKey);
       
       return new Response(
         JSON.stringify(result),
@@ -672,7 +677,7 @@ serve(async (req) => {
     }
     
     // For chat and quiz modes, we need content
-    if ((mode === "chat" || mode === "quiz") && !bookContent && !bookId) {
+    if ((mode === "chat" || mode === "quiz") && !bookContent && !effectiveBookId) {
       throw new Error("Book content or book ID is required");
     }
     
@@ -700,9 +705,9 @@ serve(async (req) => {
     let bookTitle = null;
     
     // If bookId is provided for chat or quiz, get context using RAG
-    if (bookId && (mode === "chat" || mode === "quiz")) {
+    if (effectiveBookId && (mode === "chat" || mode === "quiz")) {
       const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
-      contextText = await findRelevantChunks(searchQuery, bookId, pageNumber, supabase, googleApiKey);
+      contextText = await findRelevantChunks(searchQuery, effectiveBookId, pageNumber, supabase, googleApiKey);
       usedRag = !!contextText;
       
       // Get book title for context
@@ -710,7 +715,7 @@ serve(async (req) => {
         const { data: book } = await supabase
           .from('books')
           .select('title')
-          .eq('id', bookId)
+          .eq('id', effectiveBookId)
           .single();
         
         bookTitle = book?.title || null;

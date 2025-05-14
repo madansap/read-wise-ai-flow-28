@@ -194,9 +194,9 @@ const AIAssistantPanel = () => {
         })
         .eq('id', currentBookId);
       
-      // Prepare parameters that need to be sent
+      // Prepare parameters that need to be sent, using consistent parameter names
       const processingParams = {
-        book_id: currentBookId,
+        book_id: currentBookId,  // Use book_id consistently
         user_id: user.id,
         file_path: bookDetails.file_path,
         endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
@@ -271,7 +271,7 @@ const AIAssistantPanel = () => {
           conversationId: currentConversationId,
           user: user,
           mode: "chat",
-          bookId: currentBookId,
+          book_id: currentBookId,  // Use book_id consistently
           pageNumber: currentPage // Always send current page for context
         }
       });
@@ -326,13 +326,13 @@ const AIAssistantPanel = () => {
       
       setIsGeneratingQuiz(true);
       
-      // Call AI assistant with quiz mode, explicitly including page number
+      // Call AI assistant with quiz mode, explicitly including page number and using consistent parameter names
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: currentPageText,
           mode: "quiz",
           numQuestions: 3,
-          bookId: currentBookId,
+          book_id: currentBookId,  // Use book_id consistently
           pageNumber: currentPage // Always send current page for context
         }
       });
@@ -381,7 +381,7 @@ const AIAssistantPanel = () => {
     mutationFn: async ({ questionIndex, optionIndex }: { questionIndex: number, optionIndex: number }) => {
       const question = quizQuestions[questionIndex];
       
-      // Call AI assistant with quizEvaluation mode
+      // Call AI assistant with quizEvaluation mode, using consistent parameter naming
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: currentPageText,
@@ -392,7 +392,7 @@ const AIAssistantPanel = () => {
             correctIndex: question.correctIndex,
             userAnswerIndex: optionIndex
           },
-          bookId: currentBookId, // Send book ID for additional context
+          book_id: currentBookId,  // Use book_id consistently
           pageNumber: currentPage // Send current page for context
         }
       });

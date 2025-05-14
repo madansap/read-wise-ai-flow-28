@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
@@ -113,7 +114,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       
       while (insertAttempts < maxInsertAttempts) {
         try {
-          const { data, error } = await supabase
+          const { data, error: insertError } = await supabase
             .from('books')
             .insert({
               title: metadata.title,
@@ -127,8 +128,8 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             .select('id')
             .single();
           
-          if (error) {
-            insertError = error;
+          if (insertError) {
+            insertError = insertError;
             insertAttempts++;
           } else {
             bookId = data.id;
@@ -175,7 +176,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             
             // Prepare all required params explicitly
             const processingParams = {
-              book_id: bookId,
+              book_id: bookId,  // Use book_id consistently
               user_id: user.id,
               file_path: filePath,
               endpoint: 'extract-pdf-text' // Add endpoint information in the body
@@ -187,7 +188,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
               filePath
             });
             
-            // Call the extract-pdf-text endpoint with the endpoint parameter in the body
+            // Call the extract-pdf-text endpoint with all required parameters
             const response = await supabase.functions.invoke('ai-assistant', {
               body: processingParams
             });
