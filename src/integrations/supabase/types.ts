@@ -86,6 +86,86 @@ export type Database = {
           },
         ]
       }
+      book_chunks: {
+        Row: {
+          book_id: string
+          chunk_index: number
+          content: string
+          created_at: string | null
+          embedding: string | null
+          id: string
+          page_id: string
+        }
+        Insert: {
+          book_id: string
+          chunk_index: number
+          content: string
+          created_at?: string | null
+          embedding?: string | null
+          id?: string
+          page_id: string
+        }
+        Update: {
+          book_id?: string
+          chunk_index?: number
+          content?: string
+          created_at?: string | null
+          embedding?: string | null
+          id?: string
+          page_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "book_chunks_book_id_fkey"
+            columns: ["book_id"]
+            isOneToOne: false
+            referencedRelation: "books"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "book_chunks_page_id_fkey"
+            columns: ["page_id"]
+            isOneToOne: false
+            referencedRelation: "book_pages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      book_pages: {
+        Row: {
+          book_id: string
+          content: string | null
+          created_at: string | null
+          id: string
+          page_number: number
+          user_id: string
+        }
+        Insert: {
+          book_id: string
+          content?: string | null
+          created_at?: string | null
+          id: string
+          page_number: number
+          user_id: string
+        }
+        Update: {
+          book_id?: string
+          content?: string | null
+          created_at?: string | null
+          id?: string
+          page_number?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "book_pages_book_id_fkey"
+            columns: ["book_id"]
+            isOneToOne: false
+            referencedRelation: "books"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       books: {
         Row: {
           author: string | null
@@ -95,13 +175,13 @@ export type Database = {
           file_path: string
           file_type: string
           id: string
+          is_processed: boolean | null
           last_read_position: string | null
+          processing_status: string | null
           title: string
           total_pages: number | null
           updated_at: string
           user_id: string
-          is_processed: boolean | null
-          processing_status: string | null
         }
         Insert: {
           author?: string | null
@@ -111,13 +191,13 @@ export type Database = {
           file_path: string
           file_type: string
           id?: string
+          is_processed?: boolean | null
           last_read_position?: string | null
+          processing_status?: string | null
           title: string
           total_pages?: number | null
           updated_at?: string
           user_id: string
-          is_processed?: boolean | null
-          processing_status?: string | null
         }
         Update: {
           author?: string | null
@@ -127,13 +207,13 @@ export type Database = {
           file_path?: string
           file_type?: string
           id?: string
+          is_processed?: boolean | null
           last_read_position?: string | null
+          processing_status?: string | null
           title?: string
           total_pages?: number | null
           updated_at?: string
           user_id?: string
-          is_processed?: boolean | null
-          processing_status?: string | null
         }
         Relationships: []
       }
@@ -240,7 +320,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      match_book_chunks: {
+        Args: {
+          query_embedding: string
+          match_threshold: number
+          match_count: number
+          p_book_id: string
+        }
+        Returns: {
+          id: string
+          book_id: string
+          page_id: string
+          chunk_index: number
+          content: string
+          similarity: number
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

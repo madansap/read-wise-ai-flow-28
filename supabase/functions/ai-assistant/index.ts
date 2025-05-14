@@ -1,3 +1,4 @@
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -125,7 +126,7 @@ async function processPdf(
   bookId: string,
   userId: string,
   supabase: any,
-  openaiApiKey: string
+  googleApiKey: string
 ): Promise<{ success: boolean; pages: number; chunks: number; message?: string }> {
   try {
     // Load the PDF data
@@ -143,10 +144,19 @@ async function processPdf(
       // Process each page to extract text
       const pageTexts: string[] = [];
       const pageIds: string[] = [];
-      const pageInserts: BookPage[] = [];
+      const pageInserts: any[] = [];
       
       // Process in smaller batches to avoid memory issues
       const BATCH_SIZE = 5; // Process 5 pages at a time
+      
+      // Update book with total pages count
+      await supabase
+        .from('books')
+        .update({ 
+          total_pages: pdf.numPages,
+          processing_status: 'Extracting text...' 
+        })
+        .eq('id', bookId);
       
       // Process pages in batches
       for (let batchStart = 0; batchStart < pdf.numPages; batchStart += BATCH_SIZE) {
@@ -223,22 +233,6 @@ async function processPdf(
       
       console.log(`Inserting ${pageInserts.length} pages into database`);
       
-      // Check if the book_pages table exists by attempting a lightweight query
-      try {
-        const { data: tableCheck, error: tableError } = await supabase
-          .from('book_pages')
-          .select('id')
-          .limit(1);
-          
-        if (tableError) {
-          console.error("Error checking book_pages table:", tableError);
-          throw new Error(`Database table error: ${tableError.message}`);
-        }
-      } catch (tableCheckError) {
-        console.error("Failed to query book_pages table:", tableCheckError);
-        throw new Error("Database table 'book_pages' may not exist or is inaccessible");
-      }
-      
       // Insert pages in batches to avoid request size limits
       const DB_BATCH_SIZE = 10;
       for (let i = 0; i < pageInserts.length; i += DB_BATCH_SIZE) {
@@ -248,40 +242,12 @@ async function processPdf(
         if (pageError) {
           console.error(`Error inserting pages batch ${i}-${i+batch.length}:`, pageError);
           // Continue with other batches, but log the specific error
-          if (pageError.message?.includes("column") || pageError.message?.includes("does not exist")) {
-            throw new Error(`Database schema error: ${pageError.message}`);
-          }
         }
         
         // Small delay between batch inserts
         if (i + DB_BATCH_SIZE < pageInserts.length) {
           await new Promise(resolve => setTimeout(resolve, 200));
         }
-      }
-      
-      // Check if the book_chunks table exists with vector support
-      try {
-        const { error: chunkCheckError } = await supabase.rpc(
-          'match_book_chunks',
-          {
-            query_embedding: Array(768).fill(0),
-            match_threshold: 0.5,
-            match_count: 1,
-            p_book_id: bookId
-          }
-        );
-        
-        if (chunkCheckError && (
-          chunkCheckError.message?.includes("function") || 
-          chunkCheckError.message?.includes("does not exist") ||
-          chunkCheckError.message?.includes("vector")
-        )) {
-          console.error("Vector function check failed:", chunkCheckError);
-          throw new Error(`Vector extension error: ${chunkCheckError.message}`);
-        }
-      } catch (vectorError) {
-        console.error("Failed to use vector functionality:", vectorError);
-        throw new Error("Vector extension may not be properly installed");
       }
       
       // Process chunks and embeddings
@@ -333,7 +299,7 @@ async function processPdf(
                   
                   chunkPromises.push((async () => {
                     try {
-                      const embedding = await getEmbedding(chunk, openaiApiKey);
+                      const embedding = await getEmbedding(chunk, googleApiKey);
                       
                       return supabase.from('book_chunks').insert({
                         book_id: bookId,
@@ -349,7 +315,7 @@ async function processPdf(
                       await new Promise(resolve => setTimeout(resolve, 2000));
                       
                       try {
-                        const embedding = await getEmbedding(chunk, openaiApiKey);
+                        const embedding = await getEmbedding(chunk, googleApiKey);
                       
                         return supabase.from('book_chunks').insert({
                           book_id: bookId,
@@ -358,14 +324,8 @@ async function processPdf(
                           content: chunk,
                           embedding
                         });
-                      } catch (retryError: any) {
+                      } catch (retryError) {
                         console.error(`Retry failed for chunk ${l} for page ${j+1}:`, retryError);
-                        
-                        // Check for specific vector-related errors
-                        if (retryError.message?.includes("vector") || retryError.message?.includes("column")) {
-                          throw new Error(`Vector column error: ${retryError.message}`);
-                        }
-                        
                         return null;
                       }
                     }
@@ -384,16 +344,8 @@ async function processPdf(
               }
               
               return pageChunksAdded;
-            } catch (pageError: any) {
+            } catch (pageError) {
               console.error(`Error processing page ${j+1}:`, pageError);
-              
-              // If this is a database schema error, propagate it up
-              if (pageError.message?.includes("vector") || 
-                  pageError.message?.includes("column") || 
-                  pageError.message?.includes("does not exist")) {
-                throw pageError;
-              }
-              
               return 0;
             }
           })());
@@ -430,26 +382,16 @@ async function processPdf(
     } catch (pdfError: any) {
       console.error("PDF parsing error:", pdfError);
       
-      // Check for specific types of errors
-      let errorMessage = pdfError.message || "Unknown error";
-      let errorType = "parsing";
-      
-      if (errorMessage.includes("vector") || errorMessage.includes("extension")) {
-        errorType = "vector";
-      } else if (errorMessage.includes("column") || errorMessage.includes("does not exist") || errorMessage.includes("table")) {
-        errorType = "database";
-      }
-      
       // Update book with the specific error status
       await supabase
         .from('books')
         .update({ 
           is_processed: false,
-          processing_status: `Error (${errorType}): ${errorMessage}` 
+          processing_status: `Error: ${pdfError.message || 'Unknown PDF parsing error'}` 
         })
         .eq('id', bookId);
       
-      throw new Error(`PDF ${errorType} error: ${errorMessage}`);
+      throw new Error(`PDF parsing error: ${pdfError.message || 'Unknown error'}`);
     }
     
   } catch (error: any) {
@@ -468,7 +410,6 @@ async function processPdf(
       console.error("Failed to update error status:", updateError);
     }
     
-    // Return a structured error response instead of throwing
     return { 
       success: false, 
       pages: 0,
@@ -484,104 +425,40 @@ async function findRelevantChunks(
   bookId: string,
   pageNumber: number | null,
   supabase: any, 
-  openaiApiKey: string,
+  googleApiKey: string,
   limit: number = MAX_CONTEXT_CHUNKS
 ): Promise<string> {
   try {
-    // Reformulate the query to improve search effectiveness
-    const searchQuery = await reformulateQuery(query, openaiApiKey);
-    console.log("Original query:", query);
-    console.log("Reformulated query:", searchQuery);
+    console.log("Finding relevant chunks for query:", query);
     
-    // Get embedding for the improved query
-    const queryEmbedding = await getEmbedding(searchQuery, openaiApiKey);
+    // Get embedding for the query
+    const queryEmbedding = await getEmbedding(query, googleApiKey);
     
-    // Build the search query with optimized similarity threshold
-    let matchQuery = supabase
+    // Search for relevant chunks using vector similarity
+    const { data: chunks, error } = await supabase
       .rpc('match_book_chunks', {
         query_embedding: queryEmbedding,
-        match_threshold: 0.25, // Optimized threshold for better recall
-        match_count: limit * 3, // Get more candidates for better filtering
+        match_threshold: 0.3,
+        match_count: limit,
         p_book_id: bookId
       });
-    
-    // If page number is provided, create a second query focused on the current and adjacent pages
-    let pageMatchQuery = null;
-    let pageMatches: any[] = [];
-    let usePageContext = false; // Flag to track if we're using page-specific context
-    
-    if (pageNumber !== null) {
-      // Get wider range of nearby pages (2 pages in each direction)
-      const { data: adjacentPages } = await supabase
-        .from('book_pages')
-        .select('id')
-        .eq('book_id', bookId)
-        .gte('page_number', Math.max(1, pageNumber - 2))
-        .lte('page_number', pageNumber + 2);
-      
-      if (adjacentPages && adjacentPages.length > 0) {
-        usePageContext = true;
-        const pageIds = adjacentPages.map((p: any) => p.id);
-        
-        // Create a separate query for page-specific matches with higher limit
-        pageMatchQuery = supabase
-          .rpc('match_book_chunks', {
-            query_embedding: queryEmbedding,
-            match_threshold: 0.2, // Lower threshold for page-specific content
-            match_count: limit * 2, 
-            p_book_id: bookId
-          })
-          .in('page_id', pageIds);
-        
-        // Execute the page-specific query
-        if (pageMatchQuery) {
-          const { data: pageResults } = await pageMatchQuery;
-          if (pageResults && pageResults.length > 0) {
-            pageMatches = pageResults;
-          }
-        }
-      }
-    }
-    
-    // Execute the global search query
-    const { data: chunks, error } = await matchQuery;
     
     if (error) {
       console.error("Error searching for chunks:", error);
       return "";
     }
     
-    // Try with alternative queries if needed
-    let alternativeChunks: any[] = [];
-    
-    // If original query is significantly different from reformulated query, 
-    // also try with the original query as a fallback to capture direct quotes
-    if ((!chunks || chunks.length < 2) && query !== searchQuery && query.length > 10) {
-      console.log("Using original query as fallback");
-      const originalEmbedding = await getEmbedding(query, openaiApiKey);
-      const { data: originalChunks } = await supabase
-        .rpc('match_book_chunks', {
-          query_embedding: originalEmbedding,
-          match_threshold: 0.2,
-          match_count: limit,
-          p_book_id: bookId
-        });
+    if (!chunks || chunks.length === 0) {
+      // Fallback to keyword search if vector search returns no results
+      console.log("No vector matches found, trying keyword search");
       
-      if (originalChunks && originalChunks.length > 0) {
-        alternativeChunks = originalChunks;
-      }
-    }
-    
-    // Try keyword search for query terms if semantic search returned few results
-    if ((!chunks || chunks.length < 2) && (!alternativeChunks || alternativeChunks.length < 2)) {
-      console.log("Trying keyword-based fallback");
       // Extract keywords from query
       const keywords = query.split(/\s+/)
-        .filter(word => word.length > 4) // Only use substantial words
-        .map(word => word.replace(/[^\w]/g, '')); // Remove punctuation
+        .filter(word => word.length > 3)
+        .map(word => word.replace(/[^\w]/g, ''));
       
       if (keywords.length > 0) {
-        // Use ilike queries for each keyword
+        // Use basic text search for each keyword
         const keywordPromises = keywords.map(async (keyword) => {
           if (keyword.length < 3) return []; // Skip very short keywords
           
@@ -596,45 +473,17 @@ async function findRelevantChunks(
         });
         
         const keywordResults = await Promise.all(keywordPromises);
-        const flatResults = keywordResults.flat();
-        
-        if (flatResults.length > 0) {
-          // Add similarity score (arbitrary for keyword results)
-          alternativeChunks.push(...flatResults.map((chunk: any) => ({
-            ...chunk,
-            similarity: 0.5 // Arbitrary score for keyword matches
-          })));
-        }
+        chunks.push(...keywordResults.flat());
+      }
+      
+      if (!chunks || chunks.length === 0) {
+        return "";
       }
     }
     
-    // Combine all results
-    let allChunks = [
-      ...(chunks || []), 
-      ...pageMatches,
-      ...alternativeChunks
-    ];
-    
-    if (!allChunks || allChunks.length === 0) {
-      return "";
-    }
-    
-    // Deduplicate chunks based on id
-    const uniqueChunks = Array.from(
-      new Map(allChunks.map(chunk => [chunk.id, chunk])).values()
-    );
-    
-    // Sort by similarity
-    uniqueChunks.sort((a, b) => b.similarity - a.similarity);
-    
-    // Select diverse chunks across different pages when possible
-    const selectedChunks = selectDiverseChunks(uniqueChunks, limit, usePageContext);
-    
     // Get metadata for the chunks (page numbers, etc.)
     const enhancedChunks = await Promise.all(
-      selectedChunks.map(async (chunk) => {
-        if (!chunk) return null;
-        
+      chunks.map(async (chunk) => {
         try {
           // Get page info
           const { data: page } = await supabase
@@ -666,104 +515,22 @@ async function findRelevantChunks(
       })
     );
     
-    // Filter out nulls and sort by page number for better context flow
-    const filteredChunks = enhancedChunks.filter(c => c !== null) as SearchResult[];
-    filteredChunks.sort((a, b) => (a.page_number || 0) - (b.page_number || 0));
+    // Sort by similarity (highest first)
+    enhancedChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
     
-    // Format the chunks with metadata in a way that's helpful for the LLM
-    const contextText = filteredChunks
+    // Format the chunks with metadata
+    const contextText = enhancedChunks
+      .slice(0, limit)
       .map((chunk, index) => 
         `[EXCERPT ${index + 1} | Page ${chunk.page_number}]\n${chunk.content}\n[END EXCERPT ${index + 1}]`
       )
       .join('\n\n');
     
+    console.log(`Found ${enhancedChunks.length} relevant chunks`);
     return contextText;
   } catch (error) {
     console.error("Error in findRelevantChunks:", error);
     return "";
-  }
-}
-
-// Helper function to select diverse chunks across different pages
-function selectDiverseChunks(chunks: any[], limit: number, usePageContext: boolean): any[] {
-  if (!chunks || chunks.length === 0) return [];
-  if (chunks.length <= limit) return chunks;
-  
-  const selected: any[] = [];
-  const seenPages = new Set<string>();
-  
-  // First pass: take top chunk from each page until we reach the limit
-  for (const chunk of chunks) {
-    if (selected.length >= limit) break;
-    if (!chunk || !chunk.page_id) continue;
-    
-    // If we haven't seen this page yet, add its top chunk
-    if (!seenPages.has(chunk.page_id)) {
-      selected.push(chunk);
-      seenPages.add(chunk.page_id);
-    }
-  }
-  
-  // Second pass: if we haven't filled our quota, take remaining top chunks
-  if (selected.length < limit) {
-    // Get chunks we haven't selected yet
-    const remaining = chunks.filter(chunk => 
-      chunk && chunk.id && !selected.some(s => s.id === chunk.id)
-    );
-    
-    // Add them until we reach the limit
-    for (const chunk of remaining) {
-      if (selected.length >= limit) break;
-      selected.push(chunk);
-    }
-  }
-  
-  return selected;
-}
-
-// Reformulate query to improve embedding search
-async function reformulateQuery(query: string, apiKey: string): Promise<string> {
-  // Skip reformulation for very short queries or selections
-  if (query.length < 15) return query;
-  
-  try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=" + apiKey, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          { 
-            role: "user",
-            parts: [
-              {
-                text: "Your task is to reformulate the user's query to optimize it for semantic search. Identify important concepts, entities, and keywords. Include synonyms of key terms. For questions, rephrase to focus on the central information need. For text selections, extract key concepts. Return a concise, search-optimized version with all relevant terms.\n\nQuery: " + query
-              }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 150,
-        },
-      }),
-    });
-    
-    if (!response.ok) {
-      // If fails, return original query
-      console.error("Reformulation API error:", await response.text());
-      return query;
-    }
-    
-    const data = await response.json();
-    const reformulatedQuery = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    
-    return reformulatedQuery || query;
-  } catch (error) {
-    // In case of error, return original query
-    console.error("Error reformulating query:", error);
-    return query;
   }
 }
 
@@ -772,284 +539,216 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
-  
-  // Get the request path
-  const url = new URL(req.url);
-  const path = url.pathname;
-  
-  // Create Supabase client
-  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
-  
-  // Configure OpenAI
-  const googleApiKey = Deno.env.get("GOOGLE_API_KEY") || "AIzaSyBg_jyEFuo9xhWg8Toyb5MP0trPdVw5Fis";
-  const openaiApiKey = googleApiKey; // Use Google API key (keeping variable name for less code changes)
-  
-  // PDF Processing can be called either through the dedicated path or through the endpoint parameter
-  if (path === "/extract-pdf-text" && req.method === "POST" || path === "/" && req.method === "POST") {
-    try {
-      const requestBody = await req.json();
+
+  try {
+    // Get necessary environment variables
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+    const googleApiKey = Deno.env.get("OPENAI_API_KEY") || "";
+    
+    if (!googleApiKey) {
+      throw new Error("Missing API key");
+    }
+
+    // Initialize Supabase client
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    // Parse request body
+    const { 
+      bookContent, 
+      userQuestion, 
+      conversationId, 
+      user, 
+      mode = "chat",
+      bookId,
+      pageNumber,
+      endpoint,
+      file_path,
+      user_id
+    } = await req.json();
+
+    // Handle book processing endpoint
+    if (endpoint === 'extract-pdf-text') {
+      console.log("Processing book:", bookId);
       
-      // Handle PDF extraction either directly or through the endpoint parameter
-      if (path === "/extract-pdf-text" || requestBody.endpoint === 'extract-pdf-text') {
-        // Get parameters from the request body
-        const { book_id, user_id, file_path } = requestBody;
-        
-        if (!book_id || !user_id || !file_path) {
-          console.error("Missing required fields:", { book_id, user_id, file_path });
-          return new Response(
-            JSON.stringify({ 
-              error: "Missing required fields",
-              success: false
-            }), 
-            { 
-              status: 400, 
-              headers: { ...corsHeaders, "Content-Type": "application/json" } 
-            }
-          );
-        }
-        
-        // Update book processing status
-        try {
-          await supabase
-            .from('books')
-            .update({ 
-              is_processed: false,
-              processing_status: 'Downloading PDF...' 
-            })
-            .eq('id', book_id);
-        } catch (updateError) {
-          console.error("Error updating book status:", updateError);
-          // Continue despite the error
-        }
-        
-        // Download the PDF from Supabase Storage
-        const { data, error } = await supabase.storage.from('books').download(file_path);
-        
-        if (error || !data) {
-          console.error("Failed to download PDF:", error);
-          
-          // Update book with error status
-          try {
-            await supabase
-              .from('books')
-              .update({ 
-                is_processed: false,
-                processing_status: `Error: Failed to download PDF: ${error?.message || 'Unknown error'}` 
-              })
-              .eq('id', book_id);
-          } catch (statusError) {
-            console.error("Failed to update error status:", statusError);
-          }
-          
-          return new Response(
-            JSON.stringify({ 
-              error: `Failed to download PDF: ${error?.message || 'Unknown error'}`,
-              success: false
-            }), 
-            { 
-              status: 500, 
-              headers: { ...corsHeaders, "Content-Type": "application/json" } 
-            }
-          );
-        }
-        
-        // Process the PDF
-        const pdfBytes = await data.arrayBuffer();
-        
-        // Update status
-        try {
-          await supabase
-            .from('books')
-            .update({ processing_status: 'Extracting text and creating embeddings...' })
-            .eq('id', book_id);
-        } catch (updateError) {
-          console.error("Error updating book status:", updateError);
-          // Continue despite the error
-        }
-        
-        try {
-          // Process the PDF (extract text, create chunks, generate embeddings)
-          const result = await processPdf(pdfBytes, book_id, user_id, supabase, openaiApiKey);
-          
-          // Ensure we're returning a 200 status
-          return new Response(
-            JSON.stringify({ 
-              ...result,
-              success: true
-            }), 
-            { 
-              status: 200, 
-              headers: { ...corsHeaders, "Content-Type": "application/json" } 
-            }
-          );
-        } catch (processingError: any) {
-          console.error("PDF processing error:", processingError);
-          
-          // Try to update book status
-          try {
-            await supabase
-              .from('books')
-              .update({ 
-                is_processed: false,
-                processing_status: `Error: ${processingError.message || 'Unknown processing error'}` 
-              })
-              .eq('id', book_id);
-          } catch (statusError) {
-            console.error("Failed to update error status:", statusError);
-          }
-          
-          // Always return a 200 response even for errors, to avoid client-side issues
-          // The success: false will indicate to the client that there was a problem
-          return new Response(
-            JSON.stringify({ 
-              error: "PDF processing failed", 
-              message: processingError.message || "Unknown error",
-              success: false
-            }), 
-            { 
-              status: 200, 
-              headers: { ...corsHeaders, "Content-Type": "application/json" } 
-            }
-          );
-        }
+      if (!bookId || !user_id || !file_path) {
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing required fields for book processing", 
+            success: false 
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
       
-      // If we reach here, it's a standard AI assistant request
-      const { 
-        bookContent, 
-        userQuestion, 
-        conversationId, 
-        user, 
-        mode = "chat", 
-        numQuestions = 3, 
-        quizEvaluation = null, 
-        bookId = null,
-        pageNumber = null,
-        selectedText = null
-      } = requestBody;
+      // Update book processing status
+      await supabase
+        .from('books')
+        .update({ 
+          is_processed: false,
+          processing_status: 'Downloading PDF...' 
+        })
+        .eq('id', bookId);
       
-      // For RAG-enhanced queries
-      let contextText = "";
-      let selectedContext = "";
-      let usedRag = false;
+      // Download the PDF from storage
+      const { data, error } = await supabase.storage.from('books').download(file_path);
       
-      // If bookId is provided, use RAG to enhance context
-      if (bookId && (mode === "chat" || mode === "explainSelection" || mode === "quiz")) {
-        // For chat and quiz modes, get context based on the question
-        const searchQuery = mode === "chat" 
-          ? userQuestion 
-          : (mode === "explainSelection" ? selectedText : "");
+      if (error || !data) {
+        console.error("Failed to download PDF:", error);
         
-        // Only search if we have a query
-        if (searchQuery) {
-          contextText = await findRelevantChunks(
-            searchQuery, 
-            bookId, 
-            pageNumber, 
-            supabase, 
-            openaiApiKey
-          );
-          usedRag = !!contextText;
-        }
+        await supabase
+          .from('books')
+          .update({ 
+            is_processed: false,
+            processing_status: `Error: Failed to download PDF: ${error?.message || 'Unknown error'}` 
+          })
+          .eq('id', bookId);
         
-        // If we're in explainSelection mode and have pageNumber, get the full page content
-        if (mode === "explainSelection" && pageNumber !== null) {
-          const { data: pageData } = await supabase
-            .from('book_pages')
-            .select('content')
-            .eq('book_id', bookId)
-            .eq('page_number', pageNumber)
-            .single();
-          
-          if (pageData?.content) {
-            selectedContext = pageData.content;
-            usedRag = true;
-          }
-        }
+        return new Response(
+          JSON.stringify({ 
+            error: `Failed to download PDF: ${error?.message || 'Unknown error'}`,
+            success: false
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
       
-      // Normal processing continues
-      let systemPrompt;
-      let userPrompt;
-      let temperature = 0.3;
+      // Process the PDF
+      const pdfBytes = await data.arrayBuffer();
+      const result = await processPdf(pdfBytes, bookId, user_id, supabase, googleApiKey);
       
-      switch (mode) {
-        case "chat":
-          systemPrompt = chatSystemPrompt;
-          
-          // If we have context from RAG, use it instead of the provided bookContent
-          const effectiveBookContent = contextText || bookContent || "";
-          userPrompt = chatUserPromptTemplate(effectiveBookContent, userQuestion);
-          
-          // If using RAG context, modify the prompt to include the source
-          if (contextText) {
-            userPrompt = `I need you to answer based on the following relevant sections from the book. These excerpts were retrieved based on their semantic relevance to the user's question:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nProvide a detailed, helpful answer based specifically on the content in these excerpts. If the excerpts contain the necessary information, use it to give a complete answer. For any claims you make, indicate which excerpt supports that information (e.g., "As mentioned in excerpt 2..."). If the information in the excerpts isn't sufficient to completely answer the question, clearly state what's missing rather than making up an answer.`;
-          }
-          
-          temperature = 0.3;
-          break;
-        
-        case "quiz":
-          systemPrompt = quizSystemPrompt;
-          
-          // Enhance quiz generation with RAG context
-          if (contextText) {
-            systemPrompt += "\n\nYou have been provided with key excerpts from the book that were selected based on importance and topic coverage. Base your quiz questions on these excerpts to ensure they are relevant and accurately reflect the book's content.";
-          }
-          
-          userPrompt = quizUserPromptTemplate(contextText || bookContent, numQuestions);
-          temperature = 0.7;
-          break;
-        
-        case "quizEvaluation":
-          systemPrompt = quizEvalSystemPrompt;
-          const { question, options, correctIndex, userAnswerIndex } = quizEvaluation;
-          userPrompt = quizEvalUserPromptTemplate(
-            bookContent, 
-            question, 
-            options, 
-            correctIndex, 
-            userAnswerIndex
-          );
-          temperature = 0.4;
-          break;
-        
-        case "explainSelection":
-          systemPrompt = explainSelectionSystemPrompt;
-          
-          // If we have selectedContext from RAG, use it to provide more context
-          if (selectedContext && selectedText) {
-            userPrompt = `The user has selected this text to understand better:\n\n"""${selectedText}"""\n\nHere's the surrounding context from page ${pageNumber}:\n\n"""${selectedContext}"""\n\n${contextText ? `And here are the most relevant passages from other parts of the book that can help explain this selection:\n\n${contextText}\n\n` : ""}Please explain this selection clearly, referencing relevant context when helpful.`;
-          } else if (selectedText) {
-            // Fixed: Using correct number of arguments (just selectedText)
-            userPrompt = explainSelectionUserPromptTemplate(selectedText);
-          } else {
-            userPrompt = "Please select some text to explain.";
-          }
-          temperature = 0.4;
-          break;
-      }
-      
-      // Format the response
-      const responseText = `System Prompt: ${systemPrompt}\n\nUser Prompt: ${userPrompt}\n\nTemperature: ${temperature}`;
-      
-      return new Response(responseText, { status: 200, headers: corsHeaders });
-    } catch (error: any) {
-      console.error("Error processing request:", error);
       return new Response(
-        JSON.stringify({ 
-          error: "An error occurred while processing the request",
-          message: error.message || "Unknown error" 
-        }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify(result),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-  } else {
+    
+    // For chat and quiz modes, we need content
+    if ((mode === "chat" || mode === "quiz") && !bookContent && !bookId) {
+      throw new Error("Book content or book ID is required");
+    }
+    
+    // For chat mode, we also need a user question
+    if (mode === "chat" && !userQuestion) {
+      throw new Error("User question is required for chat mode");
+    }
+    
+    // Variables for context
+    let contextText = "";
+    let usedRag = false;
+    
+    // If bookId is provided for chat or quiz, get context using RAG
+    if (bookId && (mode === "chat" || mode === "quiz")) {
+      const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
+      contextText = await findRelevantChunks(searchQuery, bookId, pageNumber, supabase, googleApiKey);
+      usedRag = !!contextText;
+    }
+    
+    // Use OpenAI API to generate response
+    let systemPrompt;
+    let userPrompt;
+    
+    switch (mode) {
+      case "chat":
+        systemPrompt = chatSystemPrompt;
+        
+        // If we have context from RAG, use it instead of the provided bookContent
+        const effectiveBookContent = contextText || bookContent;
+        
+        // Create user prompt
+        if (contextText) {
+          userPrompt = `I need you to answer based on the following relevant sections from the book. These excerpts were retrieved based on their semantic relevance to the user's question:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nProvide a detailed, helpful answer based specifically on the content in these excerpts. If the excerpts contain the necessary information, use it to give a complete answer.`;
+        } else {
+          userPrompt = chatUserPromptTemplate(bookContent, userQuestion);
+        }
+        break;
+      
+      case "quiz":
+        systemPrompt = quizSystemPrompt;
+        
+        // Enhance with RAG context if available
+        userPrompt = quizUserPromptTemplate(contextText || bookContent, 3);
+        break;
+      
+      case "quizEvaluation":
+        systemPrompt = quizEvalSystemPrompt;
+        
+        // This should extract these from the request body
+        const { question, options, correctIndex, userAnswerIndex } = req.body?.quizEvaluation || {};
+        
+        userPrompt = quizEvalUserPromptTemplate(
+          bookContent, 
+          question, 
+          options, 
+          correctIndex, 
+          userAnswerIndex
+        );
+        break;
+      
+      default:
+        throw new Error(`Unsupported mode: ${mode}`);
+    }
+    
+    // Call the OpenAI API
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${googleApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini", // Using gpt-4o-mini for better cost efficiency
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        temperature: mode === "quiz" ? 0.7 : 0.3,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error("OpenAI API error:", errorData);
+      throw new Error(`OpenAI API error: ${errorData}`);
+    }
+    
+    const result = await response.json();
+    const aiResponse = result.choices[0].message.content;
+    
+    // Save message in database if this is a chat with conversation ID
+    if (mode === "chat" && conversationId && user) {
+      try {
+        await supabase.from('ai_messages').insert({
+          conversation_id: conversationId,
+          role: 'assistant',
+          content: aiResponse,
+        });
+      } catch (dbError) {
+        console.error("Error saving message to database:", dbError);
+        // Continue despite database error
+      }
+    }
+    
+    // Return the AI response
     return new Response(
-      JSON.stringify({ error: "Invalid request path" }),
-      { status: 400, headers: corsHeaders }
+      JSON.stringify({
+        response: aiResponse,
+        context_used: usedRag,
+      }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Error in AI assistant function:", error);
+    
+    return new Response(
+      JSON.stringify({ 
+        error: error.message || "An unknown error occurred", 
+        success: false
+      }),
+      { 
+        status: 200, // Always return 200 to avoid CORS issues, client will handle the error
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
+      }
     );
   }
 });
