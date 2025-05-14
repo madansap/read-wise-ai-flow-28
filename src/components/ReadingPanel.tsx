@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -38,10 +39,12 @@ const ReadingPanel = () => {
   const [selectedBook, setSelectedBook] = useState<any>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const { user } = useAuth();
+  const [renderTextLayer, setRenderTextLayer] = useState(false);
+  const [pdfDocument, setPdfDocument] = useState<any>(null);
 
   // Reference to the container for additional event listeners
   const containerRef = useRef<HTMLDivElement>(null);
-  const isProgrammaticScroll = useRef(false); // NEW: Track programmatic scrolls
+  const isProgrammaticScroll = useRef(false); // Track programmatic scrolls
   
   // Set up text selection event handler (do not block default behavior)
   const onMouseUp = useCallback((e: React.MouseEvent) => {
@@ -166,6 +169,7 @@ const ReadingPanel = () => {
     
     setIsLoadingText(true);
     setCurrentPageText('');
+    setRenderTextLayer(false); // Disable text layer initially
 
     try {
       const { data, error } = await supabase.storage
@@ -187,6 +191,11 @@ const ReadingPanel = () => {
 
   const handleDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
     setTotalPages(numPages);
+    // Enable text layer rendering after the document is fully loaded
+    // Add a small delay to ensure the PDF is rendered
+    setTimeout(() => {
+      setRenderTextLayer(true);
+    }, 500);
   };
 
   // Add observer to track visible pages
@@ -266,11 +275,20 @@ const ReadingPanel = () => {
     setIsLoadingText(true);
     
     try {
-      const pdf = await pdfjs.getDocument(pdfUrl).promise;
-      const page = await pdf.getPage(currentPage);
-      const textContent = await page.getTextContent();
-      const text = textContent.items.map((item: any) => item.str).join(' ');
-      setCurrentPageText(text);
+      if (!pdfDocument) {
+        const pdf = await pdfjs.getDocument(pdfUrl).promise;
+        setPdfDocument(pdf);
+        
+        const page = await pdf.getPage(currentPage);
+        const textContent = await page.getTextContent();
+        const text = textContent.items.map((item: any) => item.str).join(' ');
+        setCurrentPageText(text);
+      } else {
+        const page = await pdfDocument.getPage(currentPage);
+        const textContent = await page.getTextContent();
+        const text = textContent.items.map((item: any) => item.str).join(' ');
+        setCurrentPageText(text);
+      }
     } catch (error) {
       console.error('Error extracting text:', error);
       setCurrentPageText('');
@@ -365,9 +383,10 @@ const ReadingPanel = () => {
                 cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
                 cMapPacked: true,
               }}
+              onItemClick={(item) => console.log("Item clicked", item)}
             >
               {Array.from(new Array(totalPages), (_, index) => (
-                <div key={`page_${index + 1}`} className="mb-8" onMouseUp={onMouseUp}>
+                <div key={`page_${index + 1}`} id={`page_${index + 1}`} className="mb-8" onMouseUp={onMouseUp}>
                   <div className="text-center text-sm text-muted-foreground mb-2">
                     Page {index + 1} of {totalPages}
                   </div>
@@ -375,8 +394,8 @@ const ReadingPanel = () => {
                     <Page
                       key={`page_${index + 1}`}
                       pageNumber={index + 1}
-                      renderTextLayer={true}
-                      renderAnnotationLayer={true}
+                      renderTextLayer={renderTextLayer}
+                      renderAnnotationLayer={false}
                       className={`border shadow-sm mx-auto ${theme === 'dark' ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
                       onLoadSuccess={() => {
                         if (index + 1 === currentPage) {
