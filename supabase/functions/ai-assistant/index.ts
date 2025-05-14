@@ -636,12 +636,26 @@ serve(async (req) => {
     // Variables for context
     let contextText = "";
     let usedRag = false;
+    let bookTitle = null;
     
     // If bookId is provided for chat or quiz, get context using RAG
     if (bookId && (mode === "chat" || mode === "quiz")) {
       const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
       contextText = await findRelevantChunks(searchQuery, bookId, pageNumber, supabase, googleApiKey);
       usedRag = !!contextText;
+      
+      // Get book title for context
+      try {
+        const { data: book } = await supabase
+          .from('books')
+          .select('title')
+          .eq('id', bookId)
+          .single();
+        
+        bookTitle = book?.title || null;
+      } catch (error) {
+        console.error("Error getting book title:", error);
+      }
     }
     
     // Use OpenAI API to generate response
@@ -655,19 +669,29 @@ serve(async (req) => {
         // If we have context from RAG, use it instead of the provided bookContent
         const effectiveBookContent = contextText || bookContent;
         
+        // Add page number context to the system prompt
+        const pageContext = pageNumber ? `The user is currently viewing page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
+        const enhancedSystemPrompt = systemPrompt + (pageContext ? `\n\n${pageContext}` : '');
+        
         // Create user prompt
         if (contextText) {
-          userPrompt = `I need you to answer based on the following relevant sections from the book. These excerpts were retrieved based on their semantic relevance to the user's question:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nProvide a detailed, helpful answer based specifically on the content in these excerpts. If the excerpts contain the necessary information, use it to give a complete answer.`;
+          userPrompt = `I need you to answer based on the following relevant sections from the book. These excerpts were retrieved based on their semantic relevance to the user's question:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nPlease note that the user is currently on page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}. Provide a detailed, helpful answer based specifically on the content in these excerpts. If the excerpts contain the necessary information, use it to give a complete answer.`;
         } else {
-          userPrompt = chatUserPromptTemplate(bookContent, userQuestion);
+          userPrompt = `Book Text from Page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}:\n"""${bookContent}"""\n\nUser's Question/Request: "${userQuestion}"\n\nBased ONLY on the "Book Text" provided above from page ${pageNumber}, please address the user's question/request.`;
         }
         break;
       
       case "quiz":
         systemPrompt = quizSystemPrompt;
         
+        // Add page number context
+        const quizPageContext = pageNumber ? `Generate questions based on content from page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
+        const enhancedQuizSystemPrompt = systemPrompt + (quizPageContext ? `\n\n${quizPageContext}` : '');
+        systemPrompt = enhancedQuizSystemPrompt;
+        
         // Enhance with RAG context if available
-        userPrompt = quizUserPromptTemplate(contextText || bookContent, 3);
+        userPrompt = `Here is the text content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''} to generate quiz questions about:\n"""${contextText || bookContent}"""\n\nGenerate ${3} multiple-choice questions based ONLY on this text from page ${pageNumber}.
+Ensure each question has a clear correct answer that can be found in or directly inferred from the text.`;
         break;
       
       case "quizEvaluation":
@@ -683,6 +707,11 @@ serve(async (req) => {
           correctIndex, 
           userAnswerIndex
         );
+        
+        // Add page reference
+        if (pageNumber) {
+          userPrompt += `\n\nNote: This question is based on content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}.`;
+        }
         break;
       
       default:

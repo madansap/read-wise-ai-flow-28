@@ -1,3 +1,4 @@
+
 // AI Assistant Prompt Templates
 
 /**
@@ -12,6 +13,7 @@ RULES TO FOLLOW:
 3. If the question requires information not present in the snippet, politely state that the snippet does not contain the answer.
 4. Adopt an insightful, analytical, and helpful tone.
 5. When explaining concepts, try to connect them to the broader context of understanding a book, if appropriate from the snippet.
+6. Always reference the page number when discussing content from the book.
 
 FORMAT:
 - Format your responses using Markdown for clarity and readability.
@@ -117,6 +119,7 @@ RULES TO FOLLOW:
 3. Consider multiple interpretations if the text is ambiguous, but prioritize the most likely meaning.
 4. Provide context where helpful, but be clear about what is explicitly stated vs. what is implied.
 5. Use an educational tone that helps the reader understand the text better.
+6. Reference the page number when discussing the selected content.
 
 FORMAT:
 - Your responses should be concise but thorough, typically 1-3 paragraphs.
@@ -141,5 +144,4 @@ Please explain this selected text clearly and concisely. Focus on providing insi
 1. What the text means
 2. Any important concepts, terminology, or references
 3. The significance of the ideas presented (if apparent from the selection)
-
-`; 
+`;

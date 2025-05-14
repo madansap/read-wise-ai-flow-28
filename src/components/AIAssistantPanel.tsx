@@ -222,7 +222,7 @@ const AIAssistantPanel = () => {
         
       setBookDetails(data);
       
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error processing book:', error);
       toast({
         title: "Processing Failed",
@@ -257,13 +257,13 @@ const AIAssistantPanel = () => {
       // Call the AI assistant edge function with updated parameters including book_id and page context
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
-          bookContent: currentPageText, // We'll still send this for backward compatibility
+          bookContent: currentPageText,
           userQuestion: content,
           conversationId: currentConversationId,
           user: user,
           mode: "chat",
-          bookId: currentBookId, // Send book ID for RAG
-          pageNumber: currentPage // Send current page for context
+          bookId: currentBookId,
+          pageNumber: currentPage // Always send current page for context
         }
       });
       
@@ -275,7 +275,7 @@ const AIAssistantPanel = () => {
       return { 
         userMessage: { id: userMessageId, role: 'user' as const, content },
         aiResponse: response.data.response,
-        contextUsed: response.data.context_used // Flag if RAG context was used
+        contextUsed: response.data.context_used
       };
     },
     onSuccess: ({ userMessage, aiResponse, contextUsed }) => {
@@ -317,14 +317,14 @@ const AIAssistantPanel = () => {
       
       setIsGeneratingQuiz(true);
       
-      // Call AI assistant with quiz mode, including book_id for RAG context
+      // Call AI assistant with quiz mode, explicitly including page number
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: currentPageText,
           mode: "quiz",
           numQuestions: 3,
-          bookId: currentBookId, // Send book ID for RAG
-          pageNumber: currentPage // Send current page for context
+          bookId: currentBookId,
+          pageNumber: currentPage // Always send current page for context
         }
       });
       
@@ -634,7 +634,7 @@ const AIAssistantPanel = () => {
                     isLoadingText 
                       ? "Loading page content..." 
                       : currentPageText 
-                        ? "Ask about this page..." 
+                        ? `Ask about page ${currentPage}...` 
                         : "Select a book to start"
                   }
                   disabled={!currentPageText || isLoadingText || sendMessageMutation.isPending}
@@ -653,10 +653,17 @@ const AIAssistantPanel = () => {
                 </Button>
               </div>
               {currentPage > 0 && currentBookTitle && (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Answering based on: {currentBookTitle}, Page {currentPage}
+                <div className="mt-2 flex items-center">
+                  <span className="text-xs font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full">
+                    Page {currentPage}
+                  </span>
+                  <span className="mx-1 text-muted-foreground">•</span>
+                  <span className="text-xs text-muted-foreground truncate">{currentBookTitle}</span>
                   {currentBookId && !isLoadingText && (
-                    <span className="ml-1 text-primary text-xs">• AI has full book context</span>
+                    <>
+                      <span className="mx-1 text-xs text-muted-foreground">•</span>
+                      <span className="text-xs text-primary truncate">AI has book context</span>
+                    </>
                   )}
                 </div>
               )}
@@ -671,7 +678,7 @@ const AIAssistantPanel = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center">
                     <Zap className="h-5 w-5 mr-2 text-primary" />
-                    Quiz Yourself
+                    Quiz on Page {currentPage}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -700,8 +707,12 @@ const AIAssistantPanel = () => {
                     )}
                   </Button>
                   {currentPage > 0 && currentBookTitle && (
-                    <div className="mt-4 text-xs text-muted-foreground text-center">
-                      Based on: {currentBookTitle}, Page {currentPage}
+                    <div className="mt-4 text-xs flex items-center justify-center">
+                      <span className="font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full">
+                        Page {currentPage}
+                      </span>
+                      <span className="mx-1 text-muted-foreground">•</span>
+                      <span className="text-muted-foreground truncate">{currentBookTitle}</span>
                     </div>
                   )}
                 </CardContent>
@@ -720,9 +731,14 @@ const AIAssistantPanel = () => {
               {/* Quiz navigation and progress */}
               <div className="px-4 py-3 border-b">
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-medium">
-                    Question {currentQuestionIndex + 1} of {quizQuestions.length}
-                  </h3>
+                  <div className="flex items-center">
+                    <h3 className="font-medium">
+                      Question {currentQuestionIndex + 1} of {quizQuestions.length}
+                    </h3>
+                    <span className="ml-2 text-xs font-medium bg-primary/10 text-primary px-2 py-0.5 rounded-full">
+                      Page {currentPage}
+                    </span>
+                  </div>
                   <div className="text-sm text-muted-foreground">
                     {quizQuestions.filter(q => q.userAnswer !== undefined).length} of {quizQuestions.length} answered
                   </div>
