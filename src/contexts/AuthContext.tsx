@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
@@ -59,8 +58,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
-    navigate("/login");
+    try {
+      // Clear any local storage items related to the app
+      localStorage.removeItem('currentBookId');
+      
+      // Sign out from Supabase
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      
+      // Reset local auth state
+      setUser(null);
+      setSession(null);
+      
+      // Navigate to login page
+      navigate("/login");
+    } catch (error) {
+      console.error("Error signing out:", error);
+      // Still attempt to navigate to login even if there's an error
+      navigate("/login");
+    }
   };
 
   return (

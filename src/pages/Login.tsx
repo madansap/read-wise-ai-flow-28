@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -24,20 +23,50 @@ export default function Login() {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!email || !password) {
+      toast({
+        title: "Missing information",
+        description: "Please enter both email and password",
+        variant: "destructive"
+      });
+      return;
+    }
+    
     setLoading(true);
     
     try {
-      const { error } = await signIn(email, password);
+      const { error, data } = await signIn(email, password);
+      
       if (error) throw error;
+      
+      if (!data.session) {
+        throw new Error("Failed to create session");
+      }
+      
       toast({
         title: "Welcome back!",
         description: "You've successfully signed in."
       });
-      navigate("/");
+      
+      // Redirect will happen automatically via the useEffect
     } catch (error: any) {
+      console.error("Sign in error:", error);
+      
+      // Show more specific error messages based on error type
+      let errorMessage = "Please check your credentials and try again.";
+      
+      if (error.message?.includes("Invalid login")) {
+        errorMessage = "Invalid email or password.";
+      } else if (error.message?.includes("Email not confirmed")) {
+        errorMessage = "Please confirm your email before signing in.";
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Sign in failed",
-        description: error.message || "Please check your credentials and try again.",
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {
@@ -47,19 +76,59 @@ export default function Login() {
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!email || !password) {
+      toast({
+        title: "Missing information",
+        description: "Please enter both email and password",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    if (password.length < 6) {
+      toast({
+        title: "Password too short",
+        description: "Password must be at least 6 characters long",
+        variant: "destructive"
+      });
+      return;
+    }
+    
     setLoading(true);
     
     try {
-      const { error } = await signUp(email, password);
+      const { error, data } = await signUp(email, password);
+      
       if (error) throw error;
+      
+      if (data?.user?.identities?.length === 0) {
+        throw new Error("This email is already registered.");
+      }
+      
       toast({
         title: "Account created!",
         description: "Please check your email for a confirmation link."
       });
+      
+      // Clear the form
+      setEmail("");
+      setPassword("");
     } catch (error: any) {
+      console.error("Sign up error:", error);
+      
+      // Show more specific error messages
+      let errorMessage = "Please check your information and try again.";
+      
+      if (error.message?.includes("already registered")) {
+        errorMessage = "This email is already registered.";
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
       toast({
         title: "Sign up failed",
-        description: error.message || "Please check your information and try again.",
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {
