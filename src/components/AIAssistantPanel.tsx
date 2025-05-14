@@ -194,14 +194,23 @@ const AIAssistantPanel = () => {
         })
         .eq('id', currentBookId);
       
+      // Prepare parameters that need to be sent, using consistent parameter names
+      const processingParams = {
+        book_id: currentBookId,  // Use book_id consistently
+        user_id: user.id,
+        file_path: bookDetails.file_path,
+        endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
+      };
+      
+      console.log("Sending processing request with params:", {
+        bookId: currentBookId,
+        userId: user.id,
+        filePath: bookDetails.file_path
+      });
+      
       // Trigger processing function with the endpoint parameter
-      const { error: processingError } = await supabase.functions.invoke('ai-assistant', {
-        body: {
-          endpoint: 'extract-pdf-text',
-          book_id: currentBookId,
-          user_id: user.id,
-          file_path: bookDetails.file_path
-        }
+      const { data, error: processingError } = await supabase.functions.invoke('ai-assistant', {
+        body: processingParams
       });
       
       if (processingError) {
@@ -214,19 +223,19 @@ const AIAssistantPanel = () => {
       });
       
       // Refresh book details to show updated status
-      const { data } = await supabase
+      const { data: updatedBookData } = await supabase
         .from('books')
         .select('*')
         .eq('id', currentBookId)
         .single();
         
-      setBookDetails(data);
+      setBookDetails(updatedBookData);
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error processing book:', error);
       toast({
         title: "Processing Failed",
-        description: error.message || "An unexpected error occurred",
+        description: error.message || "An unexpected error occurred. Please check that your API keys are correctly set.",
         variant: "destructive",
       });
     } finally {
@@ -262,7 +271,7 @@ const AIAssistantPanel = () => {
           conversationId: currentConversationId,
           user: user,
           mode: "chat",
-          bookId: currentBookId,
+          book_id: currentBookId,  // Use book_id consistently
           pageNumber: currentPage // Always send current page for context
         }
       });
@@ -317,13 +326,13 @@ const AIAssistantPanel = () => {
       
       setIsGeneratingQuiz(true);
       
-      // Call AI assistant with quiz mode, explicitly including page number
+      // Call AI assistant with quiz mode, explicitly including page number and using consistent parameter names
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: currentPageText,
           mode: "quiz",
           numQuestions: 3,
-          bookId: currentBookId,
+          book_id: currentBookId,  // Use book_id consistently
           pageNumber: currentPage // Always send current page for context
         }
       });
@@ -372,7 +381,7 @@ const AIAssistantPanel = () => {
     mutationFn: async ({ questionIndex, optionIndex }: { questionIndex: number, optionIndex: number }) => {
       const question = quizQuestions[questionIndex];
       
-      // Call AI assistant with quizEvaluation mode
+      // Call AI assistant with quizEvaluation mode, using consistent parameter naming
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookContent: currentPageText,
@@ -383,7 +392,7 @@ const AIAssistantPanel = () => {
             correctIndex: question.correctIndex,
             userAnswerIndex: optionIndex
           },
-          bookId: currentBookId, // Send book ID for additional context
+          book_id: currentBookId,  // Use book_id consistently
           pageNumber: currentPage // Send current page for context
         }
       });
@@ -548,7 +557,7 @@ const AIAssistantPanel = () => {
                 <h3 className="font-medium mb-1">Ask about your book</h3>
                 <p className="text-sm">
                   {isLoadingText 
-                    ? "Loading page content..."
+                    ? "Loading page content..." 
                     : currentPageText 
                       ? "Ask any question about the current page." 
                       : "No page content available. Please select a book."}

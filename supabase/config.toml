@@ -1,5 +1,9 @@
 project_id = "qqhatprtkevixjnwakrs"
 
 [functions.ai-assistant]
+<<<<<<< HEAD
 verify_jwt = false
 
+=======
+verify_jwt = true
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93

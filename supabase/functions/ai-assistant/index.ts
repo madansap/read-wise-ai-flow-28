@@ -570,6 +570,7 @@ serve(async (req) => {
     // Get necessary environment variables
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+<<<<<<< HEAD
     const apiKey = Deno.env.get("GOOGLE_API_KEY") || "";
     
     if (!apiKey) {
@@ -595,12 +596,40 @@ serve(async (req) => {
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+=======
+    
+    // Use OPENAI_API_KEY for OpenAI calls, GOOGLE_API_KEY for embedding operations
+    const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
+    const googleApiKey = Deno.env.get("GOOGLE_API_KEY") || openaiApiKey; // Fallback to OpenAI key if Google key not set
+    
+    if (!openaiApiKey) {
+      throw new Error("Missing OpenAI API key");
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
     }
 
     // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
+<<<<<<< HEAD
     // Extract parameters from the parsed body
+=======
+    // Parse request body
+    let requestBody;
+    try {
+      requestBody = await req.json();
+      console.log("Request body received:", JSON.stringify(requestBody));
+    } catch (parseError) {
+      console.error("Error parsing request body:", parseError);
+      return new Response(
+        JSON.stringify({ 
+          error: "Invalid JSON in request body", 
+          success: false 
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
     const { 
       bookContent, 
       userQuestion, 
@@ -613,6 +642,7 @@ serve(async (req) => {
       file_path,
       user_id,
       book_id
+<<<<<<< HEAD
     } = requestBody || {};
 
     console.log("Extracted parameters:", {
@@ -658,17 +688,49 @@ serve(async (req) => {
         return new Response(
           JSON.stringify({ 
             error: "Missing required parameter: book_id", 
+=======
+    } = requestBody;
+    
+    const effectiveBookId = bookId || book_id;
+    const effectiveUserId = user_id || (user?.id);
+    
+    console.log("Request received:", {
+      mode,
+      endpoint,
+      bookId: effectiveBookId || "not provided",
+      pageNumber: pageNumber || "not provided",
+      userId: effectiveUserId || "not provided"
+    });
+
+    // Handle book processing endpoint
+    if (endpoint === 'extract-pdf-text') {
+      console.log("Processing book:", effectiveBookId);
+      
+      if (!effectiveBookId) {
+        console.error("Missing book_id in request");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing book_id for book processing", 
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
+<<<<<<< HEAD
       if (!user_id) {
         console.error("Missing user_id parameter");
         return new Response(
           JSON.stringify({ 
             error: "Missing required parameter: user_id", 
+=======
+      if (!effectiveUserId) {
+        console.error("Missing user_id in request");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing user_id for book processing", 
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -676,10 +738,17 @@ serve(async (req) => {
       }
       
       if (!file_path) {
+<<<<<<< HEAD
         console.error("Missing file_path parameter");
         return new Response(
           JSON.stringify({ 
             error: "Missing required parameter: file_path", 
+=======
+        console.error("Missing file_path in request");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing file_path for book processing", 
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -687,7 +756,24 @@ serve(async (req) => {
       }
       
       // Update book processing status
+<<<<<<< HEAD
       try {
+=======
+      await supabase
+        .from('books')
+        .update({ 
+          is_processed: false,
+          processing_status: 'Downloading PDF...' 
+        })
+        .eq('id', effectiveBookId);
+      
+      // Download the PDF from storage
+      const { data, error } = await supabase.storage.from('books').download(file_path);
+      
+      if (error || !data) {
+        console.error("Failed to download PDF:", error);
+        
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
         await supabase
           .from('books')
           .update({ 
@@ -695,6 +781,7 @@ serve(async (req) => {
             processing_status: 'Starting PDF processing' 
           })
           .eq('id', effectiveBookId);
+<<<<<<< HEAD
       } catch (error) {
         console.error("Error updating book status:", error);
         // Continue processing even if status update fails
@@ -721,6 +808,8 @@ serve(async (req) => {
         // Process the PDF
         const pdfBytes = await data.arrayBuffer();
         const result = await processPdf(pdfBytes, effectiveBookId, user_id, supabase, apiKey);
+=======
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
         
         return new Response(
           JSON.stringify({ 
@@ -757,16 +846,55 @@ serve(async (req) => {
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+<<<<<<< HEAD
     }
     
     // Handle standard chat responses
     // Default mode is chat if not specified
     let systemPrompt = chatSystemPrompt;
     let userPrompt = "";
+=======
+      
+      // Process the PDF
+      const pdfBytes = await data.arrayBuffer();
+      const result = await processPdf(pdfBytes, effectiveBookId, effectiveUserId, supabase, googleApiKey);
+      
+      return new Response(
+        JSON.stringify(result),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    // For chat and quiz modes, we need content
+    if ((mode === "chat" || mode === "quiz") && !bookContent && !effectiveBookId) {
+      throw new Error("Book content or book ID is required");
+    }
+    
+    // For chat mode, we also need a user question
+    if (mode === "chat" && !userQuestion) {
+      throw new Error("User question is required for chat mode");
+    }
+    
+    // Check for valid mode
+    const validModes = ["chat", "quiz", "quizEvaluation"];
+    if (!validModes.includes(mode)) {
+      console.error(`Unsupported mode: ${mode}`);
+      return new Response(
+        JSON.stringify({ 
+          error: `Unsupported mode: ${mode}. Valid modes are: ${validModes.join(", ")}`, 
+          success: false 
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    // Variables for context
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
     let contextText = "";
     let usedRag = false;
     let bookTitle = "";
     
+<<<<<<< HEAD
     // If we have a bookId, try to get the book title
     if (bookId) {
       try {
@@ -774,6 +902,20 @@ serve(async (req) => {
           .from("books")
           .select("title")
           .eq("id", bookId)
+=======
+    // If bookId is provided for chat or quiz, get context using RAG
+    if (effectiveBookId && (mode === "chat" || mode === "quiz")) {
+      const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
+      contextText = await findRelevantChunks(searchQuery, effectiveBookId, pageNumber, supabase, googleApiKey);
+      usedRag = !!contextText;
+      
+      // Get book title for context
+      try {
+        const { data: book } = await supabase
+          .from('books')
+          .select('title')
+          .eq('id', effectiveBookId)
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
           .single();
         
         if (book) {
@@ -827,15 +969,21 @@ Ensure each question has a clear correct answer that can be found in or directly
         systemPrompt = quizEvalSystemPrompt;
         
         // This should extract these from the request body
-        const { question, options, correctIndex, userAnswerIndex } = req.body?.quizEvaluation || {};
+        const quizData = requestBody?.quizEvaluation || {};
+        const { question, options, correctIndex, userAnswerIndex } = quizData;
         
-        userPrompt = quizEvalUserPromptTemplate(
-          bookContent, 
-          question, 
-          options, 
-          correctIndex, 
-          userAnswerIndex
-        );
+        if (!question || !options || correctIndex === undefined || userAnswerIndex === undefined) {
+          console.error("Missing quiz evaluation data:", quizData);
+          return new Response(
+            JSON.stringify({ 
+              error: "Missing quiz evaluation data. Need question, options, correctIndex, and userAnswerIndex.", 
+              success: false 
+            }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        
+        userPrompt = `Question: ${question}\n\nOptions:\n${options.map((opt: string, i: number) => `${String.fromCharCode(65 + i)}. ${opt}`).join('\n')}\n\nCorrect Answer: ${String.fromCharCode(65 + correctIndex)} (${options[correctIndex]})\nUser's Answer: ${String.fromCharCode(65 + userAnswerIndex)} (${options[userAnswerIndex]})\n\nText Content:\n"""${bookContent}"""\n\n${userAnswerIndex === correctIndex ? "The answer is CORRECT. " : "The answer is INCORRECT. "}Please provide detailed feedback on the user's answer.`;
         
         // Add page reference
         if (pageNumber) {
@@ -853,6 +1001,10 @@ Ensure each question has a clear correct answer that can be found in or directly
     const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
       method: "POST",
       headers: {
+<<<<<<< HEAD
+=======
+        "Authorization": `Bearer ${openaiApiKey}`,
+>>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

@@ -109,7 +109,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       let insertAttempts = 0;
       const maxInsertAttempts = 2;
       let bookId = null;
-      let insertError = null;
+      let currentInsertError = null;
       
       while (insertAttempts < maxInsertAttempts) {
         try {
@@ -128,11 +128,11 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             .single();
 
           if (error) {
-            insertError = error;
+            currentInsertError = error;
             insertAttempts++;
           } else {
             bookId = data.id;
-            insertError = null;
+            currentInsertError = null;
             break; // Success, exit loop
           }
           
@@ -140,7 +140,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         } catch (err) {
-          insertError = err;
+          currentInsertError = err;
           insertAttempts++;
           console.error(`Book metadata insert attempt ${insertAttempts} error:`, err);
           
@@ -150,7 +150,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
         }
       }
       
-      if (insertError || !bookId) throw insertError || new Error("Failed to insert book metadata");
+      if (currentInsertError || !bookId) throw currentInsertError || new Error("Failed to insert book metadata");
       
       // Step 3: Trigger the PDF processing function with more robust retry logic
       toast({
@@ -173,14 +173,23 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
               await new Promise(resolve => setTimeout(resolve, 1000));
             }
             
-            // Call the extract-pdf-text endpoint with the endpoint parameter in the body
+            // Prepare all required params explicitly
+            const processingParams = {
+              book_id: bookId,  // Use book_id consistently
+              user_id: user.id,
+              file_path: filePath,
+              endpoint: 'extract-pdf-text' // Add endpoint information in the body
+            };
+            
+            console.log("Sending processing request with params:", {
+              bookId,
+              userId: user.id,
+              filePath
+            });
+            
+            // Call the extract-pdf-text endpoint with all required parameters
             const response = await supabase.functions.invoke('ai-assistant', {
-              body: {
-                endpoint: 'extract-pdf-text',
-                book_id: bookId,
-                user_id: user.id,
-                file_path: filePath
-              }
+              body: processingParams
             });
             
             if (response.error) {
@@ -197,7 +206,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             console.log('Book processing initiated successfully:', response.data);
             processingError = null;
             break; // Success, exit retry loop
-          } catch (error) {
+          } catch (error: any) {
             processingError = error;
             console.error(`Error triggering PDF processing (attempt ${retryCount + 1}):`, error);
             retryCount++;
