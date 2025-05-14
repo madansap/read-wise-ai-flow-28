@@ -1,3 +1,4 @@
+
 import React, { createContext, useState, useContext, ReactNode } from 'react';
 
 // Interface for the context values
@@ -14,6 +15,8 @@ interface ReadingContextType {
   setCurrentBookId: (id: string | null) => void;
   currentBookTitle: string | null;
   setCurrentBookTitle: (title: string | null) => void;
+  workerInitialized: boolean;
+  setWorkerInitialized: (initialized: boolean) => void;
 }
 
 // Create the context with undefined initial value
@@ -27,6 +30,7 @@ export const ReadingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [isLoadingText, setIsLoadingText] = useState<boolean>(false);
   const [currentBookId, setCurrentBookId] = useState<string | null>(null);
   const [currentBookTitle, setCurrentBookTitle] = useState<string | null>(null);
+  const [workerInitialized, setWorkerInitialized] = useState<boolean>(false);
 
   // The value provided to consuming components
   const value = {
@@ -41,7 +45,9 @@ export const ReadingProvider: React.FC<{ children: ReactNode }> = ({ children })
     currentBookId,
     setCurrentBookId,
     currentBookTitle,
-    setCurrentBookTitle
+    setCurrentBookTitle,
+    workerInitialized,
+    setWorkerInitialized
   };
 
   return (

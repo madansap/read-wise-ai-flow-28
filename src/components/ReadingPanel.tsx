@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -11,9 +12,7 @@ import { toast } from '@/components/ui/use-toast';
 import { useReading } from '@/contexts/ReadingContext';
 import { useSelection } from '@/contexts/SelectionContext';
 import SelectionToolbar from './SelectionToolbar';
-
-// Set up worker source for PDF.js
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+import { usePdfWorker } from '@/hooks/usePdfWorker';
 
 const ReadingPanel = () => {
   // Use the ReadingContext
@@ -23,8 +22,12 @@ const ReadingPanel = () => {
     currentPageText, setCurrentPageText,
     isLoadingText, setIsLoadingText,
     currentBookId, setCurrentBookId,
-    currentBookTitle, setCurrentBookTitle
+    currentBookTitle, setCurrentBookTitle,
+    workerInitialized
   } = useReading();
+
+  // Initialize PDF worker
+  usePdfWorker();
 
   // Use the SelectionContext
   const { 
@@ -44,6 +47,7 @@ const ReadingPanel = () => {
   const [isDocumentLoading, setIsDocumentLoading] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [loadingProgress, setLoadingProgress] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Reference to the container for additional event listeners
   const containerRef = useRef<HTMLDivElement>(null);
@@ -79,6 +83,9 @@ const ReadingPanel = () => {
 
   // Load the current book from localStorage or fetch from database
   useEffect(() => {
+    // Don't proceed until worker is initialized
+    if (!workerInitialized) return;
+
     const fetchCurrentBook = async () => {
       if (!user) return;
 
@@ -116,7 +123,7 @@ const ReadingPanel = () => {
     };
 
     fetchCurrentBook();
-  }, [user, setCurrentPage, setCurrentBookId, setCurrentBookTitle]);
+  }, [user, setCurrentPage, setCurrentBookId, setCurrentBookTitle, workerInitialized]);
 
   // Save reading position when changing pages
   useEffect(() => {
@@ -170,6 +177,7 @@ const ReadingPanel = () => {
   const loadBook = async (book: any) => {
     if (!book || !book.file_path) return;
     
+    // Reset states
     setIsLoadingText(true);
     setCurrentPageText('');
     setPdfDocument(null);
@@ -214,6 +222,7 @@ const ReadingPanel = () => {
     setIsDocumentLoaded(true);
     setIsDocumentLoading(false);
     setLoadingProgress(100);
+    setRetryCount(0); // Reset retry count on successful load
     
     // Enable text layer after ensuring document is fully loaded
     setTimeout(() => {
@@ -224,12 +233,33 @@ const ReadingPanel = () => {
   const handleDocumentLoadError = (error: Error) => {
     console.error('Error loading PDF document:', error);
     setIsDocumentLoading(false);
-    setPdfError("Failed to load the PDF. Please try again later.");
-    toast({
-      title: "Error loading document",
-      description: error.message || "Could not load the PDF document",
-      variant: "destructive",
-    });
+    
+    // Implement retry logic
+    if (retryCount < 3 && pdfUrl) {
+      setRetryCount(prev => prev + 1);
+      toast({
+        title: "Retrying document load",
+        description: `Attempt ${retryCount + 1}/3`,
+      });
+      
+      // Wait a moment and try loading again
+      setTimeout(() => {
+        // Force a refresh of the URL to avoid caching issues
+        setPdfUrl(null);
+        setTimeout(() => {
+          if (selectedBook) {
+            loadBook(selectedBook);
+          }
+        }, 500);
+      }, 1000);
+    } else {
+      setPdfError("Failed to load the PDF. Please try again later.");
+      toast({
+        title: "Error loading document",
+        description: error.message || "Could not load the PDF document",
+        variant: "destructive",
+      });
+    }
   };
 
   // Add observer to track visible pages
@@ -313,17 +343,19 @@ const ReadingPanel = () => {
         const loadingTask = pdfjs.getDocument({
           url: pdfUrl,
           cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
-          cMapPacked: true
+          cMapPacked: true,
+          disableAutoFetch: false,
+          disableStream: false,
         });
         
         loadingTask.onProgress = (progressData) => {
           console.log(`Loading PDF: ${Math.round(progressData.loaded / progressData.total * 100)}%`);
         };
         
-        const pdf = await loadingTask.promise;
-        setPdfDocument(pdf);
-        
         try {
+          const pdf = await loadingTask.promise;
+          setPdfDocument(pdf);
+          
           // First ensure page number is valid
           if (currentPage < 1 || currentPage > pdf.numPages) {
             throw new Error(`Invalid page number: ${currentPage}`);
@@ -333,8 +365,8 @@ const ReadingPanel = () => {
           const textContent = await page.getTextContent();
           const text = textContent.items.map((item: any) => item.str).join(' ');
           setCurrentPageText(text || `[Page ${currentPage} contains no extractable text]`);
-        } catch (pageError) {
-          console.error('Error getting page text:', pageError);
+        } catch (error) {
+          console.error('Error loading PDF or getting page text:', error);
           setCurrentPageText(`[Unable to extract text from page ${currentPage}]`);
         }
       } else {
@@ -348,8 +380,8 @@ const ReadingPanel = () => {
           const textContent = await page.getTextContent();
           const text = textContent.items.map((item: any) => item.str).join(' ');
           setCurrentPageText(text || `[Page ${currentPage} contains no extractable text]`);
-        } catch (pageError) {
-          console.error('Error getting page text:', pageError);
+        } catch (error) {
+          console.error('Error getting page text:', error);
           setCurrentPageText(`[Unable to extract text from page ${currentPage}]`);
         }
       }
@@ -379,6 +411,14 @@ const ReadingPanel = () => {
     dark: 'bg-gray-900 text-gray-100',
     classic: 'bg-[#f8f2e4] text-gray-900 font-serif'
   };
+
+  // Create document options object once to avoid unnecessary re-renders
+  const documentOptions = React.useMemo(() => ({
+    cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
+    cMapPacked: true,
+    disableAutoFetch: false,
+    disableStream: false,
+  }), []);
 
   return (
     <div className="h-full flex flex-col">
@@ -427,7 +467,14 @@ const ReadingPanel = () => {
         ref={containerRef}
         className={`flex-1 overflow-auto p-4 ${themeClasses[theme]}`}
       >
-        {selectedBook && pdfUrl ? (
+        {!workerInitialized ? (
+          <div className="flex justify-center items-center h-full">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
+              <p>Initializing PDF reader...</p>
+            </div>
+          </div>
+        ) : selectedBook && pdfUrl ? (
           <div id="pdf-container" className="flex justify-center">
             {isDocumentLoading && !isDocumentLoaded && !pdfError && (
               <div className="flex flex-col justify-center items-center h-64 mt-8">
@@ -448,7 +495,11 @@ const ReadingPanel = () => {
                   <Button 
                     variant="outline" 
                     className="mt-4" 
-                    onClick={() => loadBook(selectedBook)}
+                    onClick={() => {
+                      setPdfError(null);
+                      setRetryCount(0);
+                      if (selectedBook) loadBook(selectedBook);
+                    }}
                   >
                     Retry
                   </Button>
@@ -462,6 +513,7 @@ const ReadingPanel = () => {
                 onLoadSuccess={handleDocumentLoadSuccess}
                 onLoadError={handleDocumentLoadError}
                 onLoadProgress={handleDocumentLoadProgress}
+                options={documentOptions}
                 loading={
                   <div className="flex justify-center items-center h-full">
                     <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-primary"></div>
@@ -472,12 +524,6 @@ const ReadingPanel = () => {
                     <p className="text-red-500">Failed to load PDF. Please try again.</p>
                   </div>
                 }
-                options={{
-                  cMapUrl: 'https://unpkg.com/pdfjs-dist@3.4.120/cmaps/',
-                  cMapPacked: true,
-                  disableAutoFetch: false,
-                  disableStream: false,
-                }}
                 externalLinkTarget="_blank"
               >
                 {isDocumentLoaded && Array.from(new Array(totalPages), (_, index) => (
