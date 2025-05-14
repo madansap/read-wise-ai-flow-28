@@ -198,218 +198,166 @@ async function processPdf(
                 }
               };
             } catch (pageError) {
-              console.error(`Error extracting text from page ${i+1}:`, pageError);
+              console.error(`Error processing page ${i + 1}:`, pageError);
               return null;
             }
           })());
         }
         
-        // Wait for batch to complete
+        // Wait for the batch to complete
         const batchResults = await Promise.all(batchPromises);
         
-        // Filter out nulls and add to main arrays
-        for (const result of batchResults) {
-          if (result) {
-            pageTexts.push(result.pageText);
-            pageIds.push(result.pageId);
-            pageInserts.push(result.pageInsert);
-          }
+        // Filter out any nulls from errors
+        const validResults = batchResults.filter(result => result !== null);
+        
+        // Store the page data
+        for (const result of validResults) {
+          if (!result) continue; // TypeScript safety - though we already filtered
+          
+          pageTexts.push(result.pageText);
+          pageIds.push(result.pageId);
+          pageInserts.push(result.pageInsert);
         }
         
-        // Give a small delay between batches to prevent resource exhaustion
-        if (batchEnd < pdf.numPages) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+        // Insert pages in batch
+        if (pageInserts.length > 0) {
+          await supabase
+            .from('book_pages')
+            .insert(pageInserts);
+            
+          console.log(`Inserted batch of ${pageInserts.length} pages`);
         }
       }
       
-      if (pageInserts.length === 0) {
-        throw new Error("Failed to extract text from any pages");
-      }
+      console.log(`Extracted text from ${pageTexts.length} pages`);
       
-      console.log(`Inserting ${pageInserts.length} pages into database`);
-      
-      // Insert pages in batches to avoid request size limits
-      const DB_BATCH_SIZE = 10;
-      for (let i = 0; i < pageInserts.length; i += DB_BATCH_SIZE) {
-        const batch = pageInserts.slice(i, i + DB_BATCH_SIZE);
-        const { error: pageError } = await supabase.from('book_pages').insert(batch);
-        
-        if (pageError) {
-          console.error(`Error inserting pages batch ${i}-${i+batch.length}:`, pageError);
-          // Continue with other batches, but log the specific error
-        }
-        
-        // Small delay between batch inserts
-        if (i + DB_BATCH_SIZE < pageInserts.length) {
-          await new Promise(resolve => setTimeout(resolve, 200));
-        }
-      }
-      
-      // Process chunks and embeddings
+      // Update status - creating chunks
       await supabase
         .from('books')
         .update({ 
-          processing_status: 'Creating semantic chunks and embeddings...' 
+          processing_status: 'Creating text chunks and generating embeddings...' 
         })
         .eq('id', bookId);
       
+      // Create chunks and get embeddings
       let totalChunks = 0;
       
-      // Process page content in smaller batches
-      const EMBEDDING_BATCH_SIZE = 3;
-      
-      for (let i = 0; i < pageIds.length; i += EMBEDDING_BATCH_SIZE) {
-        const batchEnd = Math.min(i + EMBEDDING_BATCH_SIZE, pageIds.length);
+      // Process page chunks in batches
+      for (let pageIndex = 0; pageIndex < pageTexts.length; pageIndex++) {
+        const pageId = pageIds[pageIndex];
+        const pageText = pageTexts[pageIndex];
+        const pageNum = pageIndex + 1;
         
-        // Update status
-        await supabase
-          .from('books')
-          .update({ 
-            processing_status: `Creating embeddings: page ${i + 1} of ${pageIds.length}` 
-          })
-          .eq('id', bookId);
-        
-        // Process pages in current batch
-        const pagePromises = [];
-        
-        for (let j = i; j < batchEnd; j++) {
-          pagePromises.push((async () => {
-            try {
-              const pageId = pageIds[j];
-              const pageContent = pageTexts[j] || "";
-              const chunks = createChunks(pageContent);
-              
-              // Process chunks in smaller batches
-              const CHUNK_BATCH_SIZE = 3;
-              let pageChunksAdded = 0;
-              
-              for (let k = 0; k < chunks.length; k += CHUNK_BATCH_SIZE) {
-                const chunkBatchEnd = Math.min(k + CHUNK_BATCH_SIZE, chunks.length);
-                const chunkPromises = [];
-                
-                for (let l = k; l < chunkBatchEnd; l++) {
-                  const chunk = chunks[l];
-                  
-                  if (chunk.trim().length < 10) continue; // Skip empty chunks
-                  
-                  chunkPromises.push((async () => {
-                    try {
-                      const embedding = await getEmbedding(chunk, apiKey);
-                      
-                      return supabase.from('book_chunks').insert({
-                        book_id: bookId,
-                        page_id: pageId,
-                        chunk_index: l,
-                        content: chunk,
-                        embedding
-                      });
-                    } catch (chunkError) {
-                      console.error(`Error processing chunk ${l} for page ${j+1}:`, chunkError);
-                      
-                      // Retry once with exponential backoff
-                      await new Promise(resolve => setTimeout(resolve, 2000));
-                      
-                      try {
-                        const embedding = await getEmbedding(chunk, apiKey);
-                      
-                        return supabase.from('book_chunks').insert({
-                          book_id: bookId,
-                          page_id: pageId,
-                          chunk_index: l,
-                          content: chunk,
-                          embedding
-                        });
-                      } catch (retryError) {
-                        console.error(`Retry failed for chunk ${l} for page ${j+1}:`, retryError);
-                        return null;
-                      }
-                    }
-                  })());
-                }
-                
-                // Wait for chunk batch to complete
-                const results = await Promise.all(chunkPromises);
-                const successfulChunks = results.filter(r => r !== null).length;
-                pageChunksAdded += successfulChunks;
-                
-                // Small delay between chunk batches
-                if (k + CHUNK_BATCH_SIZE < chunks.length) {
-                  await new Promise(resolve => setTimeout(resolve, 200));
-                }
-              }
-              
-              return pageChunksAdded;
-            } catch (pageError) {
-              console.error(`Error processing page ${j+1}:`, pageError);
-              return 0;
-            }
-          })());
+        // Update status every 10 pages
+        if (pageIndex % 10 === 0) {
+          await supabase
+            .from('books')
+            .update({ 
+              processing_status: `Processing embeddings: page ${pageNum} of ${pageTexts.length}` 
+            })
+            .eq('id', bookId);
         }
         
-        // Wait for page batch to complete
-        const pageResults = await Promise.all(pagePromises);
-        const batchChunks = pageResults.reduce((sum, count) => sum + (count || 0), 0);
-        totalChunks += batchChunks;
+        // Create chunks for this page
+        const chunks = createChunks(pageText);
         
-        // Small delay between page batches
-        if (i + EMBEDDING_BATCH_SIZE < pageIds.length) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+        // Max 20 chunks per batch to avoid Gemini/OpenAI rate limits
+        const EMBEDDING_BATCH_SIZE = 20;
+        
+        for (let chunkBatchStart = 0; chunkBatchStart < chunks.length; chunkBatchStart += EMBEDDING_BATCH_SIZE) {
+          const chunkBatchEnd = Math.min(chunkBatchStart + EMBEDDING_BATCH_SIZE, chunks.length);
+          const currentChunkBatch = chunks.slice(chunkBatchStart, chunkBatchEnd);
+          
+          // Process chunks in parallel but with reasonable concurrency
+          const chunkPromises = currentChunkBatch.map(async (chunkText, i) => {
+            const chunkIndex = chunkBatchStart + i;
+            
+            try {
+              // Get embedding for chunk
+              const embedding = await getEmbedding(chunkText, apiKey);
+              
+              // Create chunk record
+              return {
+                book_id: bookId,
+                page_id: pageId,
+                chunk_index: chunkIndex,
+                content: chunkText,
+                embedding
+              };
+            } catch (error) {
+              console.error(`Error processing chunk ${chunkIndex} from page ${pageNum}:`, error);
+              return null;
+            }
+          });
+          
+          // Wait for all chunks in this batch to be processed
+          const chunkResults = await Promise.all(chunkPromises);
+          const validChunks = chunkResults.filter(chunk => chunk !== null);
+          
+          // Insert chunks in Supabase
+          if (validChunks.length > 0) {
+            await supabase
+              .from('book_chunks')
+              .insert(validChunks);
+              
+            totalChunks += validChunks.length;
+            console.log(`Inserted ${validChunks.length} chunks from page ${pageNum}, total: ${totalChunks}`);
+          }
         }
       }
       
-      console.log(`Processing complete. Total chunks: ${totalChunks}`);
-      
-      // Mark book as processed
+      // Update book status when complete
       await supabase
         .from('books')
         .update({ 
           is_processed: true,
-          processing_status: 'Complete' 
+          processing_status: 'Complete'
         })
         .eq('id', bookId);
       
-      return { 
-        success: true, 
-        pages: pageIds.length,
+      console.log(`PDF processing complete. Processed ${pageTexts.length} pages and ${totalChunks} chunks.`);
+      
+      return {
+        success: true,
+        pages: pageTexts.length,
         chunks: totalChunks
       };
+    } catch (error: any) {
+      console.error("Error in PDF processing:", error);
       
-    } catch (pdfError: any) {
-      console.error("PDF parsing error:", pdfError);
-      
-      // Update book with the specific error status
+      // Update book with the error
       await supabase
         .from('books')
         .update({ 
           is_processed: false,
-          processing_status: `Error: ${pdfError.message || 'Unknown PDF parsing error'}` 
+          processing_status: `Error: ${error.message || "Unknown error in PDF processing"}` 
         })
         .eq('id', bookId);
       
-      throw new Error(`PDF parsing error: ${pdfError.message || 'Unknown error'}`);
+      return {
+        success: false,
+        pages: 0,
+        chunks: 0,
+        message: error.message || "Unknown error in PDF processing"
+      };
     }
-    
   } catch (error: any) {
-    console.error("PDF processing error:", error);
+    console.error("Error in processPdf outer try/catch:", error);
     
-    // Update book with error status
-    try {
-      await supabase
-        .from('books')
-        .update({ 
-          is_processed: false,
-          processing_status: `Error: ${error.message || 'Unknown processing error'}` 
-        })
-        .eq('id', bookId);
-    } catch (updateError) {
-      console.error("Failed to update error status:", updateError);
-    }
+    // Update book with the error
+    await supabase
+      .from('books')
+      .update({ 
+        is_processed: false,
+        processing_status: `Error: ${error.message || "Unknown error in PDF processing"}` 
+      })
+      .eq('id', bookId);
     
-    return { 
-      success: false, 
+    return {
+      success: false,
       pages: 0,
       chunks: 0,
-      message: error.message || "Unknown processing error"
+      message: error.message || "Error in PDF processing"
     };
   }
 }
@@ -433,8 +381,8 @@ async function findRelevantChunks(
     const { data: chunks, error } = await supabase
       .rpc('match_book_chunks', {
         query_embedding: queryEmbedding,
-        match_threshold: 0.3,
-        match_count: limit,
+        match_threshold: 0.3,  // Reduce threshold to get more matches
+        match_count: limit * 2,  // Get more chunks than needed, then filter
         p_book_id: bookId
       });
     
@@ -476,8 +424,8 @@ async function findRelevantChunks(
       }
     }
     
-    // Get metadata for the chunks (page numbers, etc.)
-    const enhancedChunks = await Promise.all(
+    // If we have a pageNumber, prioritize chunks from the current page
+    let enhancedChunks = await Promise.all(
       chunks.map(async (chunk) => {
         try {
           // Get page info
@@ -510,14 +458,30 @@ async function findRelevantChunks(
       })
     );
     
-    // Sort by similarity (highest first)
-    enhancedChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+    // Prioritize chunks from current page
+    if (pageNumber) {
+      enhancedChunks.sort((a, b) => {
+        // First prioritize by current page
+        if (a.page_number === pageNumber && b.page_number !== pageNumber) return -1;
+        if (a.page_number !== pageNumber && b.page_number === pageNumber) return 1;
+        
+        // Then by similarity
+        return (b.similarity || 0) - (a.similarity || 0);
+      });
+    } else {
+      // Otherwise sort by similarity (highest first)
+      enhancedChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+    }
     
-    // Format the chunks with metadata
+    // Now take only the top chunks after resorting
+    enhancedChunks = enhancedChunks.slice(0, limit);
+    
+    // Format the chunks with metadata, sorting by page number for readability
+    enhancedChunks.sort((a, b) => a.page_number - b.page_number);
+    
     const contextText = enhancedChunks
-      .slice(0, limit)
       .map((chunk, index) => 
-        `[EXCERPT ${index + 1} | Page ${chunk.page_number}]\n${chunk.content}\n[END EXCERPT ${index + 1}]`
+        `[EXCERPT FROM PAGE ${chunk.page_number}]\n${chunk.content}\n[END EXCERPT]`
       )
       .join('\n\n');
     
@@ -570,7 +534,6 @@ serve(async (req) => {
     // Get necessary environment variables
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-<<<<<<< HEAD
     const apiKey = Deno.env.get("GOOGLE_API_KEY") || "";
     
     if (!apiKey) {
@@ -596,40 +559,11 @@ serve(async (req) => {
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
-=======
-    
-    // Use OPENAI_API_KEY for OpenAI calls, GOOGLE_API_KEY for embedding operations
-    const openaiApiKey = Deno.env.get("OPENAI_API_KEY") || "";
-    const googleApiKey = Deno.env.get("GOOGLE_API_KEY") || openaiApiKey; // Fallback to OpenAI key if Google key not set
-    
-    if (!openaiApiKey) {
-      throw new Error("Missing OpenAI API key");
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
     }
 
     // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-<<<<<<< HEAD
-    // Extract parameters from the parsed body
-=======
-    // Parse request body
-    let requestBody;
-    try {
-      requestBody = await req.json();
-      console.log("Request body received:", JSON.stringify(requestBody));
-    } catch (parseError) {
-      console.error("Error parsing request body:", parseError);
-      return new Response(
-        JSON.stringify({ 
-          error: "Invalid JSON in request body", 
-          success: false 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
     const { 
       bookContent, 
       userQuestion, 
@@ -642,7 +576,6 @@ serve(async (req) => {
       file_path,
       user_id,
       book_id
-<<<<<<< HEAD
     } = requestBody || {};
 
     console.log("Extracted parameters:", {
@@ -678,59 +611,29 @@ serve(async (req) => {
 
     // Handle book processing endpoint
     if (endpoint === 'extract-pdf-text') {
-      console.log("Processing book with ID:", book_id || bookId);
+      console.log("Processing book:", bookId || book_id);
       
-      // Check all required parameters with detailed error messages
-      const effectiveBookId = book_id || bookId;
+      // Use consistent parameter naming
+      const effectiveBookId = bookId || book_id;
+      const effectiveUserId = user_id || (user?.id);
       
+      // Validate required parameters
       if (!effectiveBookId) {
         console.error("Missing book_id parameter");
         return new Response(
           JSON.stringify({ 
             error: "Missing required parameter: book_id", 
-=======
-    } = requestBody;
-    
-    const effectiveBookId = bookId || book_id;
-    const effectiveUserId = user_id || (user?.id);
-    
-    console.log("Request received:", {
-      mode,
-      endpoint,
-      bookId: effectiveBookId || "not provided",
-      pageNumber: pageNumber || "not provided",
-      userId: effectiveUserId || "not provided"
-    });
-
-    // Handle book processing endpoint
-    if (endpoint === 'extract-pdf-text') {
-      console.log("Processing book:", effectiveBookId);
-      
-      if (!effectiveBookId) {
-        console.error("Missing book_id in request");
-        return new Response(
-          JSON.stringify({ 
-            error: "Missing book_id for book processing", 
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
-<<<<<<< HEAD
-      if (!user_id) {
+      if (!effectiveUserId) {
         console.error("Missing user_id parameter");
         return new Response(
           JSON.stringify({ 
             error: "Missing required parameter: user_id", 
-=======
-      if (!effectiveUserId) {
-        console.error("Missing user_id in request");
-        return new Response(
-          JSON.stringify({ 
-            error: "Missing user_id for book processing", 
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -738,57 +641,27 @@ serve(async (req) => {
       }
       
       if (!file_path) {
-<<<<<<< HEAD
         console.error("Missing file_path parameter");
         return new Response(
           JSON.stringify({ 
             error: "Missing required parameter: file_path", 
-=======
-        console.error("Missing file_path in request");
-        return new Response(
-          JSON.stringify({ 
-            error: "Missing file_path for book processing", 
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       
-      // Update book processing status
-<<<<<<< HEAD
       try {
-=======
-      await supabase
-        .from('books')
-        .update({ 
-          is_processed: false,
-          processing_status: 'Downloading PDF...' 
-        })
-        .eq('id', effectiveBookId);
-      
-      // Download the PDF from storage
-      const { data, error } = await supabase.storage.from('books').download(file_path);
-      
-      if (error || !data) {
-        console.error("Failed to download PDF:", error);
-        
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
+        // Update book status to indicate processing has started
         await supabase
           .from('books')
           .update({ 
             is_processed: false,
-            processing_status: 'Starting PDF processing' 
+            processing_status: 'Downloading PDF...' 
           })
           .eq('id', effectiveBookId);
-<<<<<<< HEAD
-      } catch (error) {
-        console.error("Error updating book status:", error);
-        // Continue processing even if status update fails
-      }
-      
-      // Get the file from Storage
-      try {
+        
+        // Download the PDF from storage
         const { data, error } = await supabase.storage
           .from('books')
           .download(file_path);
@@ -807,9 +680,7 @@ serve(async (req) => {
         
         // Process the PDF
         const pdfBytes = await data.arrayBuffer();
-        const result = await processPdf(pdfBytes, effectiveBookId, user_id, supabase, apiKey);
-=======
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
+        const result = await processPdf(pdfBytes, effectiveBookId, effectiveUserId, supabase, apiKey);
         
         return new Response(
           JSON.stringify({ 
@@ -846,141 +717,91 @@ serve(async (req) => {
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-<<<<<<< HEAD
     }
     
     // Handle standard chat responses
     // Default mode is chat if not specified
     let systemPrompt = chatSystemPrompt;
     let userPrompt = "";
-=======
-      
-      // Process the PDF
-      const pdfBytes = await data.arrayBuffer();
-      const result = await processPdf(pdfBytes, effectiveBookId, effectiveUserId, supabase, googleApiKey);
-      
-      return new Response(
-        JSON.stringify(result),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    
-    // For chat and quiz modes, we need content
-    if ((mode === "chat" || mode === "quiz") && !bookContent && !effectiveBookId) {
-      throw new Error("Book content or book ID is required");
-    }
-    
-    // For chat mode, we also need a user question
-    if (mode === "chat" && !userQuestion) {
-      throw new Error("User question is required for chat mode");
-    }
-    
-    // Check for valid mode
-    const validModes = ["chat", "quiz", "quizEvaluation"];
-    if (!validModes.includes(mode)) {
-      console.error(`Unsupported mode: ${mode}`);
-      return new Response(
-        JSON.stringify({ 
-          error: `Unsupported mode: ${mode}. Valid modes are: ${validModes.join(", ")}`, 
-          success: false 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-    
+  
     // Variables for context
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
     let contextText = "";
     let usedRag = false;
     let bookTitle = "";
     
-<<<<<<< HEAD
     // If we have a bookId, try to get the book title
-    if (bookId) {
-      try {
-        const { data: book } = await supabase
-          .from("books")
-          .select("title")
-          .eq("id", bookId)
-=======
-    // If bookId is provided for chat or quiz, get context using RAG
-    if (effectiveBookId && (mode === "chat" || mode === "quiz")) {
-      const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
-      contextText = await findRelevantChunks(searchQuery, effectiveBookId, pageNumber, supabase, googleApiKey);
-      usedRag = !!contextText;
-      
-      // Get book title for context
+    if (bookId || book_id) {
+      const effectiveBookId = bookId || book_id;
       try {
         const { data: book } = await supabase
           .from('books')
-          .select('title')
-          .eq('id', effectiveBookId)
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
+          .select("title")
+          .eq("id", effectiveBookId)
           .single();
         
         if (book) {
           bookTitle = book.title;
         }
       } catch (error) {
-        console.warn("Error fetching book title:", error);
+        console.error("Error fetching book title:", error);
+        // Continue without book title
       }
     }
     
-    // If we have bookId (and in chat or quiz mode), enhance with RAG
-    if (bookId && (mode === "chat" || mode === "quiz")) {
+    // Get relevant chunks if needed for chat or quiz
+    if ((bookId || book_id) && (mode === "chat" || mode === "quiz")) {
+      const effectiveBookId = bookId || book_id;
       const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
-      contextText = await findRelevantChunks(searchQuery, bookId, pageNumber, supabase, apiKey);
+      contextText = await findRelevantChunks(searchQuery, effectiveBookId, pageNumber, supabase, apiKey);
       usedRag = !!contextText;
-      
-      if (!contextText && mode === "chat") {
-        // Fallback to the current page content if no relevant chunks found
-        contextText = bookContent || "";
-      }
     }
     
-    // Prepare the request according to the mode
+    // Process based on mode
     switch (mode) {
       case "chat":
-        // Add page number context to the system prompt
+        // Create a more detailed system prompt
         const pageContext = pageNumber ? `The user is currently viewing page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
-        const enhancedSystemPrompt = systemPrompt + (pageContext ? `\n\n${pageContext}` : '');
-        systemPrompt = enhancedSystemPrompt;
+        systemPrompt = chatSystemPrompt + (pageContext ? `\n\n${pageContext}` : '');
+        
+        // Add clarity on using RAG content
+        systemPrompt += `\n\nWhen provided with excerpts from the book, only use information from those excerpts to answer. Don't make up information that isn't in the excerpts. If the excerpts don't contain the answer, say so clearly and suggest what might help.`;
         
         // Create user prompt
         if (contextText) {
-          userPrompt = `I need you to answer based on the following relevant sections from the book. These excerpts were retrieved based on their semantic relevance to the user's question:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nPlease note that the user is currently on page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}. Provide a detailed, helpful answer based specifically on the content in these excerpts. If the excerpts contain the necessary information, use it to give a complete answer.`;
+          userPrompt = `I'll provide you with relevant excerpts from the book that match the user's question. Your job is to answer based ONLY on these excerpts:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nProvide a clear, direct answer that addresses the question specifically using information from these excerpts. If the answer isn't found in the excerpts, acknowledge that and suggest what might help. Be conversational but avoid unnecessary commentary.`;
         } else {
-          userPrompt = `Book Text from Page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}:\n"""${bookContent}"""\n\nUser's Question/Request: "${userQuestion}"\n\nBased ONLY on the "Book Text" provided above from page ${pageNumber}, please address the user's question/request.`;
+          userPrompt = `Here is text content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}:\n\n"""${bookContent}"""\n\nUser's question: ${userQuestion}\n\nBased ONLY on the provided page content, answer the question directly and concisely. If the answer isn't in this text, acknowledge that limitation clearly.`;
+        }
+        
+        // Add page reference
+        if (pageNumber) {
+          userPrompt += `\n\nNote: This answer is based on content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}.`;
         }
         break;
       
       case "quiz":
         // Add page number context
         const quizPageContext = pageNumber ? `Generate questions based on content from page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
-        const enhancedQuizSystemPrompt = systemPrompt + (quizPageContext ? `\n\n${quizPageContext}` : '');
-        systemPrompt = enhancedQuizSystemPrompt;
+        systemPrompt = quizSystemPrompt + (quizPageContext ? `\n\n${quizPageContext}` : '');
         
         // Enhance with RAG context if available
         userPrompt = `Here is the text content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''} to generate quiz questions about:\n"""${contextText || bookContent}"""\n\nGenerate ${3} multiple-choice questions based ONLY on this text from page ${pageNumber}.
 Ensure each question has a clear correct answer that can be found in or directly inferred from the text.`;
+        
+        // Add page reference
+        if (pageNumber) {
+          userPrompt += `\n\nNote: This quiz is based on content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}.`;
+        }
         break;
       
       case "quizEvaluation":
         systemPrompt = quizEvalSystemPrompt;
         
         // This should extract these from the request body
-        const quizData = requestBody?.quizEvaluation || {};
-        const { question, options, correctIndex, userAnswerIndex } = quizData;
+        const { question, options, correctIndex, userAnswerIndex } = requestBody;
         
         if (!question || !options || correctIndex === undefined || userAnswerIndex === undefined) {
-          console.error("Missing quiz evaluation data:", quizData);
-          return new Response(
-            JSON.stringify({ 
-              error: "Missing quiz evaluation data. Need question, options, correctIndex, and userAnswerIndex.", 
-              success: false 
-            }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
+          throw new Error("Missing quiz evaluation parameters");
         }
         
         userPrompt = `Question: ${question}\n\nOptions:\n${options.map((opt: string, i: number) => `${String.fromCharCode(65 + i)}. ${opt}`).join('\n')}\n\nCorrect Answer: ${String.fromCharCode(65 + correctIndex)} (${options[correctIndex]})\nUser's Answer: ${String.fromCharCode(65 + userAnswerIndex)} (${options[userAnswerIndex]})\n\nText Content:\n"""${bookContent}"""\n\n${userAnswerIndex === correctIndex ? "The answer is CORRECT. " : "The answer is INCORRECT. "}Please provide detailed feedback on the user's answer.`;
@@ -1001,10 +822,6 @@ Ensure each question has a clear correct answer that can be found in or directly
     const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
       method: "POST",
       headers: {
-<<<<<<< HEAD
-=======
-        "Authorization": `Bearer ${openaiApiKey}`,
->>>>>>> 698df8ee311e72c6c22b77477fd18adc00b27b93
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -1051,6 +868,7 @@ Ensure each question has a clear correct answer that can be found in or directly
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
+    
   } catch (error) {
     console.error("Error in AI assistant function:", error);
     

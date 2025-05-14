@@ -41,6 +41,7 @@ type Book = {
   is_processed?: boolean;
   processing_status?: string | null;
   file_path?: string;
+  total_pages?: number;
 };
 
 const QUICK_PROMPTS = [
@@ -49,6 +50,25 @@ const QUICK_PROMPTS = [
   { text: "What does this mean?", icon: <HelpCircle className="h-4 w-4 mr-2" /> },
   { text: "Analyze the author's perspective", icon: <MessageSquare className="h-4 w-4 mr-2" /> },
 ];
+
+// Format message content to highlight page references and improve display
+const formatMessage = (content: string) => {
+  // Check if content starts with a page reference pattern
+  const pageRefMatch = content.match(/^Note: This (.+) is based on content from page (\d+)( of "(.+)")?\.$/m);
+  
+  if (pageRefMatch) {
+    // Extract the page reference and remove it from the content
+    const cleanContent = content.replace(/^Note: This (.+) is based on content from page (\d+)( of "(.+)")?\.$/m, '');
+    
+    // Clean up any extra whitespace that might be present after removing the note
+    const formattedContent = cleanContent.replace(/\n{3,}/g, '\n\n').trim();
+    
+    // Add a custom formatted page reference as markdown
+    return formattedContent + `\n\n---\n*Page ${pageRefMatch[2]}${pageRefMatch[3] ? ` of ${pageRefMatch[4]}` : ''}*`;
+  }
+  
+  return content;
+};
 
 const AIAssistantPanel = () => {
   const { user } = useAuth();
@@ -152,24 +172,64 @@ const AIAssistantPanel = () => {
           
         if (error) throw error;
         setBookDetails(data);
+        
+        // If processing is complete but UI doesn't reflect it yet, show a toast notification
+        if (data.is_processed && data.processing_status === 'Complete' && 
+            bookDetails?.is_processed === false) {
+          toast({
+            title: "Book Processing Complete",
+            description: `${data.title} is now ready for AI-enhanced interactions!`,
+          });
+        }
       } catch (error) {
         console.error("Error fetching book details:", error);
       }
     };
     
+    // Initial fetch
     fetchBookDetails();
     
-    // Poll for updates if the book is being processed
-    let intervalId: number | null = null;
-    
-    if (currentBookId && bookDetails && bookDetails.processing_status?.includes('Processing')) {
-      intervalId = window.setInterval(fetchBookDetails, 5000); // Check every 5 seconds
-    }
+    // Set up real-time subscription to book status changes
+    const subscription = supabase
+      .channel('book-status-changes')
+      .on('postgres_changes', 
+        { 
+          event: 'UPDATE', 
+          schema: 'public', 
+          table: 'books',
+          filter: `id=eq.${currentBookId}`
+        }, 
+        (payload) => {
+          console.log('Book status changed:', payload);
+          // Update local state with the new data
+          setBookDetails(payload.new as Book);
+          
+          // Show notification when processing completes
+          if (payload.new.is_processed && payload.new.processing_status === 'Complete' &&
+              payload.old.is_processed === false) {
+            toast({
+              title: "Book Processing Complete",
+              description: `${payload.new.title} is now ready for AI-enhanced interactions!`,
+            });
+          }
+          
+          // Show notification for processing errors
+          if (payload.new.processing_status?.startsWith('Error:')) {
+            toast({
+              title: "Processing Error",
+              description: payload.new.processing_status,
+              variant: "destructive",
+            });
+          }
+        }
+      )
+      .subscribe();
     
     return () => {
-      if (intervalId !== null) window.clearInterval(intervalId);
+      // Clean up subscription when component unmounts or bookId changes
+      subscription.unsubscribe();
     };
-  }, [currentBookId, bookDetails?.processing_status]);
+  }, [currentBookId]);
 
   // Handle manual book processing
   const processBook = async () => {
@@ -182,9 +242,25 @@ const AIAssistantPanel = () => {
       return;
     }
     
+    // Prevent multiple processing attempts
+    if (isProcessingBook || bookDetails.processing_status?.includes('Processing')) {
+      toast({
+        title: "Already processing",
+        description: "This book is already being processed. Please wait for it to complete.",
+      });
+      return;
+    }
+    
     setIsProcessingBook(true);
     
     try {
+      // Update local state immediately for better UI feedback
+      setBookDetails({
+        ...bookDetails,
+        is_processed: false,
+        processing_status: 'Queued for processing'
+      });
+      
       // Update status to indicate processing is starting
       await supabase
         .from('books')
@@ -202,11 +278,7 @@ const AIAssistantPanel = () => {
         endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
       };
       
-      console.log("Sending processing request with params:", {
-        bookId: currentBookId,
-        userId: user.id,
-        filePath: bookDetails.file_path
-      });
+      console.log("Sending processing request with params:", processingParams);
       
       // Trigger processing function with the endpoint parameter
       const { data, error: processingError } = await supabase.functions.invoke('ai-assistant', {
@@ -217,22 +289,29 @@ const AIAssistantPanel = () => {
         throw processingError;
       }
       
+      console.log("Processing response:", data);
+      
       toast({
         title: "Processing Started",
         description: "Book processing has been initiated. This may take a few minutes.",
       });
       
-      // Refresh book details to show updated status
-      const { data: updatedBookData } = await supabase
-        .from('books')
-        .select('*')
-        .eq('id', currentBookId)
-        .single();
-        
-      setBookDetails(updatedBookData);
-      
     } catch (error: any) {
       console.error('Error processing book:', error);
+      
+      // Update book status to reflect the error
+      try {
+        await supabase
+          .from('books')
+          .update({ 
+            is_processed: false,
+            processing_status: `Error: ${error.message || "Unknown error"}` 
+          })
+          .eq('id', currentBookId);
+      } catch (statusError) {
+        console.error("Failed to update error status:", statusError);
+      }
+      
       toast({
         title: "Processing Failed",
         description: error.message || "An unexpected error occurred. Please check that your API keys are correctly set.",
@@ -246,9 +325,16 @@ const AIAssistantPanel = () => {
   // Send message mutation
   const sendMessageMutation = useMutation({
     mutationFn: async (content: string) => {
-      if (!user || !currentConversationId || !currentPageText || isLoadingText) {
-        throw new Error("Missing required data or page is still loading");
+      if (!user || !currentConversationId) {
+        throw new Error("Missing user or conversation data");
       }
+      
+      if (!currentPageText && !bookDetails?.is_processed) {
+        throw new Error("Page content is not loaded or book hasn't been processed");
+      }
+      
+      // Show thinking state immediately
+      setUserInput("");
       
       // First, add the user message to the database
       const userMessageId = uuidv4();
@@ -280,10 +366,37 @@ const AIAssistantPanel = () => {
         throw new Error(response.error.message || "Error from AI assistant");
       }
       
+      // If we want to include the page reference in the displayed message
+      const aiResponse = response.data.response;
+      
+      // Add a page reference to the AI message if not already present
+      let enhancedResponse = aiResponse;
+      if (currentPage && currentBookTitle) {
+        if (!enhancedResponse.includes(`page ${currentPage}`)) {
+          enhancedResponse = enhancedResponse + `\n\nNote: This answer is based on content from page ${currentPage}${currentBookTitle ? ` of "${currentBookTitle}"` : ''}.`;
+        }
+      }
+      
+      // Save the AI message to the database with the enhanced response
+      const aiMessageId = uuidv4();
+      const { error: aiMsgError } = await supabase
+        .from('ai_messages')
+        .insert({
+          id: aiMessageId,
+          conversation_id: currentConversationId,
+          role: 'assistant',
+          content: enhancedResponse
+        });
+      
+      if (aiMsgError) {
+        console.error("Error saving AI message:", aiMsgError);
+        // Continue anyway to show response to user
+      }
+      
       // Return all needed data
       return { 
         userMessage: { id: userMessageId, role: 'user' as const, content },
-        aiResponse: response.data.response,
+        aiResponse: enhancedResponse,
         contextUsed: response.data.context_used
       };
     },
@@ -296,17 +409,24 @@ const AIAssistantPanel = () => {
         ]
       );
       
-      // Optionally show toast when RAG was used
-      if (contextUsed) {
+      // Show different toast messages based on context
+      if (contextUsed && bookDetails?.is_processed) {
         toast({
-          title: "Enhanced Context Used",
-          description: "AI used broader book context to improve the answer.",
+          title: "Enhanced Response",
+          description: "AI referenced multiple sections from the book to give a better answer.",
+          variant: "default",
+        });
+      } else if (!bookDetails?.is_processed) {
+        toast({
+          title: "Basic Response",
+          description: "Process the book for enhanced AI capabilities with semantic search.",
           variant: "default",
         });
       }
       
-      // Clear the input field
+      // Clear the input field and scroll to bottom
       setUserInput("");
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     },
     onError: (error: any) => {
       toast({
@@ -498,6 +618,47 @@ const AIAssistantPanel = () => {
 
   return (
     <div className="h-full flex flex-col">
+      {/* Show page number reference and process button if a book is loaded */}
+      {currentBookId && (
+        <div className="bg-muted text-muted-foreground text-sm p-2 flex items-center justify-between">
+          <div className="flex items-center">
+            <span>
+              Page {currentPage} of {bookDetails?.total_pages || '?'}
+            </span>
+            {isLoadingText && (
+              <span className="flex items-center ml-2">
+                <div className="h-3 w-3 mr-1 animate-spin rounded-full border-t-2 border-primary"></div>
+                Loading text...
+              </span>
+            )}
+          </div>
+          
+          {/* Always show process button for loaded books */}
+          {!bookDetails?.is_processed && (
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={processBook}
+              disabled={isProcessingBook || bookDetails?.processing_status?.includes('Processing')}
+              className="text-xs h-7"
+            >
+              {isProcessingBook || bookDetails?.processing_status?.includes('Processing') 
+                ? <div className="flex items-center"><div className="h-3 w-3 mr-1 animate-spin rounded-full border-t-2 border-primary"></div>Processing...</div>
+                : <div className="flex items-center"><Zap className="h-3 w-3 mr-1" />Process Book</div>
+              }
+            </Button>
+          )}
+          
+          {/* Show processed status for processed books */}
+          {bookDetails?.is_processed && (
+            <span className="text-xs flex items-center text-green-600 dark:text-green-400">
+              <Zap className="h-3 w-3 mr-1" />
+              AI Ready
+            </span>
+          )}
+        </div>
+      )}
+      
       <Tabs 
         value={activeTab} 
         onValueChange={(value) => setActiveTab(value as "chat" | "quiz")}
@@ -516,29 +677,18 @@ const AIAssistantPanel = () => {
           </TabsList>
         </div>
         
-        {/* Show book processing status or prompt */}
-        {!bookDetails?.is_processed && (
+        {/* Show book processing status notification, but don't block interface */}
+        {currentBookId && !bookDetails?.is_processed && (
           <div className="mx-4 mt-3 mb-0 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-800 rounded-md p-3">
             <div className="flex items-start">
               <AlertTriangle className="h-5 w-5 text-amber-500 mr-2 flex-shrink-0 mt-0.5" />
-              <div className="flex-grow">
-                <h4 className="font-semibold text-sm mb-1">Book needs processing</h4>
-                <p className="text-sm text-muted-foreground mb-2">
+              <div>
+                <h4 className="font-semibold text-sm mb-1">Processing Status</h4>
+                <p className="text-sm text-muted-foreground">
                   {bookDetails?.processing_status?.includes('Processing') 
-                    ? `Processing in progress: ${bookDetails.processing_status}`
-                    : "This book needs to be processed for AI chat and quiz features to work properly."}
+                    ? bookDetails.processing_status
+                    : "Basic chat is available, but processing the book will enable AI-enhanced capabilities."}
                 </p>
-                {!bookDetails?.processing_status?.includes('Processing') && (
-                  <Button 
-                    size="sm" 
-                    onClick={processBook}
-                    disabled={isProcessingBook}
-                    className="bg-amber-500 hover:bg-amber-600 text-white"
-                  >
-                    <Zap className="h-4 w-4 mr-2" />
-                    {isProcessingBook ? "Processing..." : "Process Book Now"}
-                  </Button>
-                )}
               </div>
             </div>
           </div>
@@ -559,7 +709,9 @@ const AIAssistantPanel = () => {
                   {isLoadingText 
                     ? "Loading page content..." 
                     : currentPageText 
-                      ? "Ask any question about the current page." 
+                      ? bookDetails?.is_processed 
+                        ? "Ask any question about the current page." 
+                        : "Basic chat available. Process the book for enhanced features."
                       : "No page content available. Please select a book."}
                 </p>
               </div>
@@ -580,9 +732,9 @@ const AIAssistantPanel = () => {
                       }`}
                     >
                       {msg.role === "assistant" ? (
-                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                        <div className="prose prose-sm dark:prose-invert max-w-none break-words">
                           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-                            {msg.content}
+                            {formatMessage(msg.content)}
                           </ReactMarkdown>
                         </div>
                       ) : (
