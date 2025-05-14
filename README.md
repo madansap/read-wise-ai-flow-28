@@ -1,73 +1,66 @@
-# Welcome to your Lovable project
+# ReadWise - AI-Enhanced Book Reader
 
-## Project info
+## Google Gemini Integration Update
 
-**URL**: https://lovable.dev/projects/312286e4-a515-4c46-b6ed-2b9bb7de481c
+This project now uses Google Gemini exclusively for all AI processing, replacing the previous OpenAI implementation. The key changes include:
 
-## How can I edit this code?
+- Replaced OpenAI API calls with Google Gemini API calls for chat completions
+- Updated the vector database to support Google Gemini's 3072-dimensional embeddings (previously 1536 for OpenAI)
+- Maintained the existing RAG (Retrieval-Augmented Generation) architecture
+- Updated database migration scripts and vector search functions
+- Added test scripts for verifying the Google Gemini integration
 
-There are several ways of editing your application.
+To use this application, you'll need to:
+1. Set up a Google API key with access to the Gemini API
+2. Add your Google API key to the Supabase environment variables (in `.cursor/mcp.json` for development)
+3. Run the database migrations to update the vector dimensions
 
-**Use Lovable**
+## Book-Aware AI Chat Feature
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/312286e4-a515-4c46-b6ed-2b9bb7de481c) and start prompting.
+The application provides contextually relevant answers about uploaded books through a Retrieval-Augmented Generation (RAG) system with these components:
 
-Changes made via Lovable will be committed automatically to this repo.
+- PDF text extraction and chunking when a book is uploaded
+- Embedding generation for each chunk using Google Gemini API
+- Vector search to find relevant passages when a question is asked
+- Enhanced context delivery to the AI model
 
-**Use your preferred IDE**
+The implementation includes:
+- Database tables (`book_pages` and `book_chunks`) to store extracted text and embeddings
+- Vector similarity search functions in PostgreSQL
+- Supabase Edge Function to extract text, generate embeddings, and implement RAG
+- BookUploader component that triggers processing after upload
+- AIAssistantPanel that includes book_id and page context in API calls
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+## Features
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+- PDF book upload and viewing
+- Page navigation with thumbnail previews
+- Book library management
+- AI assistant with contextual awareness of book content
+- Highlighting and annotations
+- Quiz generation from book content
 
-Follow these steps:
+## Technical Stack
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+- React + TypeScript + Vite for the frontend
+- Tailwind CSS + shadcn/ui for styling
+- Supabase for backend and database
+- Google Gemini for AI processing
+- PostgreSQL with pgvector for vector similarity search
+- Supabase Edge Functions for serverless processing
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Getting Started
 
-# Step 3: Install the necessary dependencies.
-npm i
+1. Clone the repository
+2. Install dependencies with `npm install`
+3. Set up environment variables:
+   - Create a `.env` file with your Supabase and Google API credentials
+   - Update `.cursor/mcp.json` with your API keys
+4. Run the development server with `npm run dev`
+5. Run the database migrations to set up vector search capabilities
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+## Testing
 
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/312286e4-a515-4c46-b6ed-2b9bb7de481c) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/tips-tricks/custom-domain#step-by-step-guide)
+The project includes test scripts for verifying the Google Gemini integration:
+- `test-edge-function.js` - Tests basic chat functionality
+- `test-process-book.js` - Tests PDF processing and embedding generation

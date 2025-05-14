@@ -76,8 +76,8 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       while (uploadAttempts < maxUploadAttempts) {
         try {
           const { error } = await supabase.storage
-            .from('books')
-            .upload(filePath, file);
+        .from('books')
+        .upload(filePath, file);
           
           if (!error) {
             uploadError = null;
@@ -102,7 +102,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
           }
         }
       }
-      
+
       if (uploadError) throw uploadError;
 
       // Step 2: Save book metadata to the books table with better error handling
@@ -114,19 +114,19 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       while (insertAttempts < maxInsertAttempts) {
         try {
           const { data, error } = await supabase
-            .from('books')
-            .insert({
-              title: metadata.title,
-              author: metadata.author || null,
-              file_path: filePath,
-              file_type: file.type,
+        .from('books')
+        .insert({
+          title: metadata.title,
+          author: metadata.author || null,
+          file_path: filePath,
+          file_type: file.type,
               user_id: user.id,
               is_processed: false,
               processing_status: 'Queued for processing'
             })
             .select('id')
             .single();
-          
+
           if (error) {
             insertError = error;
             insertAttempts++;
@@ -176,10 +176,10 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             // Call the extract-pdf-text endpoint with the endpoint parameter in the body
             const response = await supabase.functions.invoke('ai-assistant', {
               body: {
+                endpoint: 'extract-pdf-text',
                 book_id: bookId,
                 user_id: user.id,
-                file_path: filePath,
-                endpoint: 'extract-pdf-text' // Add endpoint information in the body
+                file_path: filePath
               }
             });
             
@@ -216,7 +216,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             title: "Processing started with warnings",
             description: "Your book was uploaded but processing may be delayed. You can try manual processing from the library.",
             variant: "destructive",
-          });
+      });
         } else {
           toast({
             title: "Processing initiated",

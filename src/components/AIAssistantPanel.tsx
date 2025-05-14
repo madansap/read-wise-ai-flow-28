@@ -197,10 +197,10 @@ const AIAssistantPanel = () => {
       // Trigger processing function with the endpoint parameter
       const { error: processingError } = await supabase.functions.invoke('ai-assistant', {
         body: {
+          endpoint: 'extract-pdf-text',
           book_id: currentBookId,
           user_id: user.id,
-          file_path: bookDetails.file_path,
-          endpoint: 'extract-pdf-text' // Include endpoint in body for extraction
+          file_path: bookDetails.file_path
         }
       });
       

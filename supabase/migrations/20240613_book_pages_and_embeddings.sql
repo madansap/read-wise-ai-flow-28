@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS public.book_chunks (
   page_id UUID NOT NULL REFERENCES public.book_pages(id) ON DELETE CASCADE,
   chunk_index INTEGER NOT NULL,
   content TEXT NOT NULL,
-  embedding VECTOR(1536), -- OpenAI embeddings are 1536 dimensions
+  embedding VECTOR(3072), -- Google Gemini embeddings are 3072 dimensions
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
   
   UNIQUE(page_id, chunk_index)

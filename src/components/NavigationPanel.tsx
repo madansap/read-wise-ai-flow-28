@@ -37,19 +37,19 @@ const NavigationPanel = () => {
 
   // Declare fetchBooks outside of useEffect
   const fetchBooks = useCallback(async () => {
-    if (!user) return;
-    
-    try {
-      setLoading(true);
+      if (!user) return;
+      
+      try {
+        setLoading(true);
       // First, try to get books with minimal fields we know exist
-      const { data, error } = await supabase
-        .from('books')
-        .select('id, title, author, cover_image')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      
+        const { data, error } = await supabase
+          .from('books')
+          .select('id, title, author, cover_image')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
       // Map the returned data to our Book type, adding processing fields if they exist
       const mappedBooks = (data || []).map(book => {
         return {
@@ -64,25 +64,25 @@ const NavigationPanel = () => {
       });
       
       setBooks(mappedBooks);
-      
-      // Check for currently selected book
-      const currentBookId = localStorage.getItem('currentBookId');
-      if (currentBookId) {
-        setSelectedBookId(currentBookId);
+        
+        // Check for currently selected book
+        const currentBookId = localStorage.getItem('currentBookId');
+        if (currentBookId) {
+          setSelectedBookId(currentBookId);
       } else if (mappedBooks.length > 0) {
-        // Select the first book if none is selected
+          // Select the first book if none is selected
         setSelectedBookId(mappedBooks[0].id);
         localStorage.setItem('currentBookId', mappedBooks[0].id);
+        }
+      } catch (error: any) {
+        toast({
+          title: "Error fetching books",
+          description: error.message,
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
       }
-    } catch (error: any) {
-      toast({
-        title: "Error fetching books",
-        description: error.message,
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
   }, [user]);
 
   // Use the fetchBooks function in useEffect
@@ -406,20 +406,20 @@ const NavigationPanel = () => {
           <div className="space-y-2">
             {books.map((book) => (
               <div key={book.id} className="flex items-center">
-                <Button
-                  variant={selectedBookId === book.id ? "secondary" : "ghost"}
-                  className="w-full justify-start font-normal h-auto py-2 px-3"
-                  onClick={() => selectBook(book.id)}
-                >
+              <Button
+                variant={selectedBookId === book.id ? "secondary" : "ghost"}
+                className="w-full justify-start font-normal h-auto py-2 px-3"
+                onClick={() => selectBook(book.id)}
+              >
                   <div className="flex items-center justify-between w-full">
-                    <div className="truncate text-left">
-                      <p className="truncate">{book.title}</p>
-                      {book.author && (
-                        <p className="text-xs text-muted-foreground truncate">
-                          {book.author}
-                        </p>
-                      )}
-                    </div>
+                <div className="truncate text-left">
+                  <p className="truncate">{book.title}</p>
+                  {book.author && (
+                    <p className="text-xs text-muted-foreground truncate">
+                      {book.author}
+                    </p>
+                  )}
+                </div>
                     
                     <div className="ml-2 flex-shrink-0">
                       {renderProcessingStatus(book)}
@@ -436,7 +436,7 @@ const NavigationPanel = () => {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <MoreVertical className="h-4 w-4" />
-                    </Button>
+              </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {(book.is_processed === false || !book.is_processed) && (

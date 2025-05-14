@@ -141,9 +141,9 @@ const SelectionToolbar = () => {
         // Create new conversation
         const { data: newConv, error: createError } = await supabase
           .from('ai_conversations')
-          .insert({
-            user_id: user.id,
-            book_id: currentBookId,
+        .insert({
+          user_id: user.id,
+          book_id: currentBookId,
             title: noteTitle
           })
           .select('id')

@@ -1,4 +1,3 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -12,7 +11,7 @@ import {
   explainSelectionUserPromptTemplate
 } from "./prompts.ts";
 import { PDFDocument } from "https://esm.sh/pdf-lib@1.17.1";
-import * as pdfjs from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/+esm";
+import * as pdfjs from "pdfjs-dist/build/pdf.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,12 +30,8 @@ const PDFJS_WORKER_SRC = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSIO
 // Initialize PDF.js with worker
 async function initPDFJS() {
   try {
-    if (typeof pdfjs !== 'undefined' && pdfjs.GlobalWorkerOptions) {
-      pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC;
-      console.log("PDF.js worker initialized successfully");
-    } else {
-      console.error("PDF.js not properly loaded");
-    }
+    const pdfjsWorker = await import("pdfjs-dist/build/pdf.worker.entry");
+    pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
   } catch (error) {
     console.error("Error initializing PDF.js worker:", error);
   }
@@ -126,7 +121,7 @@ async function processPdf(
   bookId: string,
   userId: string,
   supabase: any,
-  googleApiKey: string
+  apiKey: string
 ): Promise<{ success: boolean; pages: number; chunks: number; message?: string }> {
   try {
     // Load the PDF data
@@ -261,7 +256,7 @@ async function processPdf(
       let totalChunks = 0;
       
       // Process page content in smaller batches
-      const EMBEDDING_BATCH_SIZE = 3; // Process 3 pages at a time for embeddings
+      const EMBEDDING_BATCH_SIZE = 3;
       
       for (let i = 0; i < pageIds.length; i += EMBEDDING_BATCH_SIZE) {
         const batchEnd = Math.min(i + EMBEDDING_BATCH_SIZE, pageIds.length);
@@ -299,7 +294,7 @@ async function processPdf(
                   
                   chunkPromises.push((async () => {
                     try {
-                      const embedding = await getEmbedding(chunk, googleApiKey);
+                      const embedding = await getEmbedding(chunk, apiKey);
                       
                       return supabase.from('book_chunks').insert({
                         book_id: bookId,
@@ -315,7 +310,7 @@ async function processPdf(
                       await new Promise(resolve => setTimeout(resolve, 2000));
                       
                       try {
-                        const embedding = await getEmbedding(chunk, googleApiKey);
+                        const embedding = await getEmbedding(chunk, apiKey);
                       
                         return supabase.from('book_chunks').insert({
                           book_id: bookId,
@@ -425,14 +420,14 @@ async function findRelevantChunks(
   bookId: string,
   pageNumber: number | null,
   supabase: any, 
-  googleApiKey: string,
+  apiKey: string,
   limit: number = MAX_CONTEXT_CHUNKS
 ): Promise<string> {
   try {
     console.log("Finding relevant chunks for query:", query);
     
     // Get embedding for the query
-    const queryEmbedding = await getEmbedding(query, googleApiKey);
+    const queryEmbedding = await getEmbedding(query, apiKey);
     
     // Search for relevant chunks using vector similarity
     const { data: chunks, error } = await supabase
@@ -541,19 +536,71 @@ serve(async (req) => {
   }
 
   try {
+    // Debug logging for request and environment variables
+    console.log("Function triggered at:", new Date().toISOString());
+    console.log("Request headers:", Object.fromEntries([...req.headers.entries()]));
+    
+    // Create a clone of the request to read the body multiple times
+    const reqClone = req.clone();
+    const rawBody = await reqClone.text();
+    console.log("Raw request body:", rawBody);
+    
+    // Check environment variables
+    console.log("GOOGLE_API_KEY exists:", !!Deno.env.get("GOOGLE_API_KEY"));
+    console.log("SUPABASE_URL exists:", !!Deno.env.get("SUPABASE_URL"));
+    console.log("SUPABASE_SERVICE_ROLE_KEY exists:", !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
+    
+    // Parse request body safely
+    let requestBody;
+    try {
+      requestBody = JSON.parse(rawBody);
+      console.log("Parsed request body:", requestBody);
+    } catch (parseError) {
+      console.error("Failed to parse request body:", parseError);
+      return new Response(
+        JSON.stringify({ 
+          error: "Invalid JSON in request body", 
+          details: parseError.message,
+          success: false 
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
     // Get necessary environment variables
     const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    const googleApiKey = Deno.env.get("OPENAI_API_KEY") || "";
+    const apiKey = Deno.env.get("GOOGLE_API_KEY") || "";
     
-    if (!googleApiKey) {
-      throw new Error("Missing API key");
+    if (!apiKey) {
+      console.error("Missing API key: GOOGLE_API_KEY");
+      return new Response(
+        JSON.stringify({ 
+          error: "Missing API key: GOOGLE_API_KEY", 
+          success: false 
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      console.error("Missing Supabase credentials:", {
+        url: !!supabaseUrl,
+        serviceKey: !!supabaseServiceKey
+      });
+      return new Response(
+        JSON.stringify({ 
+          error: "Missing Supabase credentials", 
+          success: false 
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
-    // Parse request body
+    // Extract parameters from the parsed body
     const { 
       bookContent, 
       userQuestion, 
@@ -564,17 +611,75 @@ serve(async (req) => {
       pageNumber,
       endpoint,
       file_path,
-      user_id
-    } = await req.json();
+      user_id,
+      book_id
+    } = requestBody || {};
+
+    console.log("Extracted parameters:", {
+      endpoint,
+      mode,
+      book_id: book_id || bookId,
+      user_id,
+      file_path,
+      conversationId: !!conversationId,
+      userQuestion: !!userQuestion,
+      bookContent: !!bookContent
+    });
+
+    // Add health check endpoint
+    if (endpoint === 'health-check') {
+      console.log("Health check request received");
+      const envCheck = {
+        apiKey: !!apiKey,
+        supabaseUrl: !!supabaseUrl,
+        supabaseServiceKey: !!supabaseServiceKey
+      };
+      
+      return new Response(
+        JSON.stringify({ 
+          status: "ok", 
+          message: "Edge Function is running", 
+          env: envCheck,
+          timestamp: new Date().toISOString()
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // Handle book processing endpoint
     if (endpoint === 'extract-pdf-text') {
-      console.log("Processing book:", bookId);
+      console.log("Processing book with ID:", book_id || bookId);
       
-      if (!bookId || !user_id || !file_path) {
+      // Check all required parameters with detailed error messages
+      const effectiveBookId = book_id || bookId;
+      
+      if (!effectiveBookId) {
+        console.error("Missing book_id parameter");
         return new Response(
           JSON.stringify({ 
-            error: "Missing required fields for book processing", 
+            error: "Missing required parameter: book_id", 
+            success: false 
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      if (!user_id) {
+        console.error("Missing user_id parameter");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing required parameter: user_id", 
+            success: false 
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      if (!file_path) {
+        console.error("Missing file_path parameter");
+        return new Response(
+          JSON.stringify({ 
+            error: "Missing required parameter: file_path", 
             success: false 
           }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -582,96 +687,122 @@ serve(async (req) => {
       }
       
       // Update book processing status
-      await supabase
-        .from('books')
-        .update({ 
-          is_processed: false,
-          processing_status: 'Downloading PDF...' 
-        })
-        .eq('id', bookId);
-      
-      // Download the PDF from storage
-      const { data, error } = await supabase.storage.from('books').download(file_path);
-      
-      if (error || !data) {
-        console.error("Failed to download PDF:", error);
-        
+      try {
         await supabase
           .from('books')
           .update({ 
             is_processed: false,
-            processing_status: `Error: Failed to download PDF: ${error?.message || 'Unknown error'}` 
+            processing_status: 'Starting PDF processing' 
           })
-          .eq('id', bookId);
+          .eq('id', effectiveBookId);
+      } catch (error) {
+        console.error("Error updating book status:", error);
+        // Continue processing even if status update fails
+      }
+      
+      // Get the file from Storage
+      try {
+        const { data, error } = await supabase.storage
+          .from('books')
+          .download(file_path);
+        
+        if (error) {
+          console.error("Error downloading PDF:", error);
+          throw new Error(`Error downloading file: ${error.message}`);
+        }
+        
+        if (!data) {
+          console.error("No data returned from storage");
+          throw new Error("No data returned from storage");
+        }
+        
+        console.log("Successfully downloaded PDF, starting processing");
+        
+        // Process the PDF
+        const pdfBytes = await data.arrayBuffer();
+        const result = await processPdf(pdfBytes, effectiveBookId, user_id, supabase, apiKey);
         
         return new Response(
           JSON.stringify({ 
-            error: `Failed to download PDF: ${error?.message || 'Unknown error'}`,
-            success: false
+            success: result.success,
+            pages: result.pages,
+            chunks: result.chunks,
+            message: result.success ? 
+              `Successfully processed ${result.pages} pages and created ${result.chunks} chunks` :
+              result.message
           }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      } catch (error: any) {
+        console.error("Error processing PDF:", error);
+        
+        // Update book with the error
+        try {
+          await supabase
+            .from('books')
+            .update({ 
+              is_processed: false,
+              processing_status: `Error: ${error.message || "Unknown error"}` 
+            })
+            .eq('id', effectiveBookId);
+        } catch (statusError) {
+          console.error("Failed to update error status:", statusError);
+        }
+        
+        return new Response(
+          JSON.stringify({ 
+            success: false, 
+            error: error.message || "Error processing PDF" 
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      
-      // Process the PDF
-      const pdfBytes = await data.arrayBuffer();
-      const result = await processPdf(pdfBytes, bookId, user_id, supabase, googleApiKey);
-      
-      return new Response(
-        JSON.stringify(result),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
     }
     
-    // For chat and quiz modes, we need content
-    if ((mode === "chat" || mode === "quiz") && !bookContent && !bookId) {
-      throw new Error("Book content or book ID is required");
-    }
-    
-    // For chat mode, we also need a user question
-    if (mode === "chat" && !userQuestion) {
-      throw new Error("User question is required for chat mode");
-    }
-    
-    // Variables for context
+    // Handle standard chat responses
+    // Default mode is chat if not specified
+    let systemPrompt = chatSystemPrompt;
+    let userPrompt = "";
     let contextText = "";
     let usedRag = false;
-    let bookTitle = null;
+    let bookTitle = "";
     
-    // If bookId is provided for chat or quiz, get context using RAG
-    if (bookId && (mode === "chat" || mode === "quiz")) {
-      const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
-      contextText = await findRelevantChunks(searchQuery, bookId, pageNumber, supabase, googleApiKey);
-      usedRag = !!contextText;
-      
-      // Get book title for context
+    // If we have a bookId, try to get the book title
+    if (bookId) {
       try {
         const { data: book } = await supabase
-          .from('books')
-          .select('title')
-          .eq('id', bookId)
+          .from("books")
+          .select("title")
+          .eq("id", bookId)
           .single();
         
-        bookTitle = book?.title || null;
+        if (book) {
+          bookTitle = book.title;
+        }
       } catch (error) {
-        console.error("Error getting book title:", error);
+        console.warn("Error fetching book title:", error);
       }
     }
     
-    // Use OpenAI API to generate response
-    let systemPrompt;
-    let userPrompt;
+    // If we have bookId (and in chat or quiz mode), enhance with RAG
+    if (bookId && (mode === "chat" || mode === "quiz")) {
+      const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
+      contextText = await findRelevantChunks(searchQuery, bookId, pageNumber, supabase, apiKey);
+      usedRag = !!contextText;
+      
+      if (!contextText && mode === "chat") {
+        // Fallback to the current page content if no relevant chunks found
+        contextText = bookContent || "";
+      }
+    }
     
+    // Prepare the request according to the mode
     switch (mode) {
       case "chat":
-        systemPrompt = chatSystemPrompt;
-        
-        // If we have context from RAG, use it instead of the provided bookContent
-        const effectiveBookContent = contextText || bookContent;
-        
         // Add page number context to the system prompt
         const pageContext = pageNumber ? `The user is currently viewing page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
         const enhancedSystemPrompt = systemPrompt + (pageContext ? `\n\n${pageContext}` : '');
+        systemPrompt = enhancedSystemPrompt;
         
         // Create user prompt
         if (contextText) {
@@ -682,8 +813,6 @@ serve(async (req) => {
         break;
       
       case "quiz":
-        systemPrompt = quizSystemPrompt;
-        
         // Add page number context
         const quizPageContext = pageNumber ? `Generate questions based on content from page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
         const enhancedQuizSystemPrompt = systemPrompt + (quizPageContext ? `\n\n${quizPageContext}` : '');
@@ -718,31 +847,35 @@ Ensure each question has a clear correct answer that can be found in or directly
         throw new Error(`Unsupported mode: ${mode}`);
     }
     
-    // Call the OpenAI API
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    console.log("Calling Google Gemini API...");
+    
+    // Call Google Gemini API
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${googleApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini", // Using gpt-4o-mini for better cost efficiency
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
+        contents: [
+          { role: "user", parts: [{ text: systemPrompt }] },
+          { role: "model", parts: [{ text: "I understand. I'll act as an AI assistant for book readers as instructed." }] },
+          { role: "user", parts: [{ text: userPrompt }] }
         ],
-        temperature: mode === "quiz" ? 0.7 : 0.3,
+        generationConfig: {
+          temperature: mode === "quiz" ? 0.7 : 0.3,
+          maxOutputTokens: 1024,
+        },
       }),
     });
     
     if (!response.ok) {
       const errorData = await response.text();
-      console.error("OpenAI API error:", errorData);
-      throw new Error(`OpenAI API error: ${errorData}`);
+      console.error("Google Gemini API error:", errorData);
+      throw new Error(`Google Gemini API error: ${errorData}`);
     }
     
     const result = await response.json();
-    const aiResponse = result.choices[0].message.content;
+    const aiResponse = result.candidates[0].content.parts[0].text;
     
     // Save message in database if this is a chat with conversation ID
     if (mode === "chat" && conversationId && user) {
