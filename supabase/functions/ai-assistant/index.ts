@@ -362,14 +362,14 @@ async function processPdf(
   }
 }
 
-// Semantic search to find relevant chunks
+// Semantic search to find relevant chunks - increase the limit to get more context
 async function findRelevantChunks(
   query: string, 
   bookId: string,
   pageNumber: number | null,
   supabase: any, 
   apiKey: string,
-  limit: number = MAX_CONTEXT_CHUNKS
+  limit: number = 10  // Increasing default limit to 10 for better context
 ): Promise<string> {
   try {
     console.log("Finding relevant chunks for query:", query);
@@ -381,7 +381,7 @@ async function findRelevantChunks(
     const { data: chunks, error } = await supabase
       .rpc('match_book_chunks', {
         query_embedding: queryEmbedding,
-        match_threshold: 0.3,  // Reduce threshold to get more matches
+        match_threshold: 0.2,  // Lower threshold to get more matches
         match_count: limit * 2,  // Get more chunks than needed, then filter
         p_book_id: bookId
       });
@@ -420,6 +420,7 @@ async function findRelevantChunks(
       }
       
       if (!chunks || chunks.length === 0) {
+        console.log("No chunks found with keyword search either");
         return "";
       }
     }
@@ -458,6 +459,21 @@ async function findRelevantChunks(
       })
     );
     
+    // Remove duplicates based on content
+    const uniqueChunks = [];
+    const seenContent = new Set();
+    
+    for (const chunk of enhancedChunks) {
+      // Use first 100 chars as a fingerprint to avoid exact duplicates
+      const contentFingerprint = chunk.content.substring(0, 100);
+      if (!seenContent.has(contentFingerprint)) {
+        seenContent.add(contentFingerprint);
+        uniqueChunks.push(chunk);
+      }
+    }
+    
+    enhancedChunks = uniqueChunks;
+    
     // Prioritize chunks from current page
     if (pageNumber) {
       enhancedChunks.sort((a, b) => {
@@ -485,7 +501,7 @@ async function findRelevantChunks(
       )
       .join('\n\n');
     
-    console.log(`Found ${enhancedChunks.length} relevant chunks`);
+    console.log(`Found ${enhancedChunks.length} relevant chunks from ${new Set(enhancedChunks.map(c => c.page_number)).size} different pages`);
     return contextText;
   } catch (error) {
     console.error("Error in findRelevantChunks:", error);
@@ -602,6 +618,7 @@ serve(async (req) => {
       book_id: effectiveBookId,
       user_id: effectiveUserId,
       file_path,
+      pageNumber,
       conversationId: !!conversationId,
       userQuestion: !!userQuestion,
       bookContent: !!bookContent
@@ -761,11 +778,17 @@ serve(async (req) => {
       }
     }
     
-    // Get relevant chunks if needed for chat or quiz
-    if (effectiveBookId && (mode === "chat" || mode === "quiz")) {
-      const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
-      contextText = await findRelevantChunks(searchQuery, effectiveBookId, pageNumber, supabase, apiKey);
+    // ALWAYS get relevant chunks from the entire book for chat mode
+    if (effectiveBookId && mode === "chat") {
+      console.log("Looking up context for the entire book with ID:", effectiveBookId);
+      contextText = await findRelevantChunks(userQuestion, effectiveBookId, pageNumber, supabase, apiKey, 10);
       usedRag = !!contextText;
+      
+      if (usedRag) {
+        console.log("Successfully found context from RAG");
+      } else {
+        console.log("No RAG context found, falling back to current page only");
+      }
     }
     
     // Process based on mode
@@ -829,6 +852,7 @@ Ensure each question has a clear correct answer that can be found in or directly
     }
     
     console.log("Calling Google Gemini API...");
+    console.log("Context used:", usedRag ? "Yes - found relevant chunks" : "No - using only current page");
     
     // Call Google Gemini API
     const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
