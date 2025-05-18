@@ -1,922 +1,436 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import {
-  chatSystemPrompt,
-  chatUserPromptTemplate,
-  quizSystemPrompt,
-  quizUserPromptTemplate,
-  quizEvalSystemPrompt,
-  quizEvalUserPromptTemplate,
-  explainSelectionSystemPrompt,
-  explainSelectionUserPromptTemplate
-} from "./prompts.ts";
-import { PDFDocument } from "https://esm.sh/pdf-lib@1.17.1";
-import * as pdfjs from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.js";
 
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.22.0";
+
+// CORS headers
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Embedding chunk size
-const CHUNK_SIZE = 1000;
-const CHUNK_OVERLAP = 200;
-const MAX_CONTEXT_CHUNKS = 5; // Maximum number of chunks to include in context
+// Environment variables
+const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const googleApiKey = Deno.env.get("GOOGLE_API_KEY") || "";
 
-// Add importMap to configure external dependencies for Deno
-const PDFJS_VERSION = '3.11.174';
-const PDFJS_WORKER_SRC = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/pdf.worker.min.js`;
+// Check if required environment variables are present
+if (!supabaseUrl) console.error("SUPABASE_URL is missing");
+if (!supabaseServiceKey) console.error("SUPABASE_SERVICE_ROLE_KEY is missing");
+if (!googleApiKey) console.error("GOOGLE_API_KEY is missing");
 
-// Initialize PDF.js with worker
-async function initPDFJS() {
+// Create a Supabase client with service role key for accessing protected data
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+// Function to find relevant chunks for a query using vector similarity search
+async function findRelevantChunks(query: string, bookId: string, pageNumber?: number, searchScope: 'page' | 'book' = 'book') {
+  console.log(`Finding relevant chunks for query: ${query} `);
+  
   try {
-    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC;
-    console.log('PDF.js worker configured with version:', PDFJS_VERSION);
+    // If search scope is set to just the current page and we have a page number
+    if (searchScope === 'page' && pageNumber) {
+      console.log(`Looking up context for page ${pageNumber} of book ${bookId}`);
+      
+      // First get the page ID for the given page number
+      const { data: pageData, error: pageError } = await supabase
+        .from('book_pages')
+        .select('id')
+        .eq('book_id', bookId)
+        .eq('page_number', pageNumber)
+        .single();
+        
+      if (pageError || !pageData) {
+        console.log(`No page found for book ${bookId} and page ${pageNumber}`);
+        return [];
+      }
+      
+      // Get chunks for this specific page
+      const pageId = pageData.id;
+      
+      // Generate embeddings for the query using Google Gemini API
+      const embedding = await generateEmbedding(query);
+      if (!embedding) {
+        throw new Error("Failed to generate embeddings for query");
+      }
+      
+      // Use the match_page_chunks function to find chunks on this page
+      const { data, error } = await supabase.rpc('match_page_chunks', {
+        query_embedding: embedding,
+        page_id_param: pageId,
+        match_threshold: 0.5, // Lower threshold to get more results
+        match_count: 5 // Limit to top 5 most relevant chunks
+      });
+      
+      if (error) {
+        console.log(`Vector search error: ${error.message}`);
+        return [];
+      }
+      
+      if (data && data.length > 0) {
+        console.log(`Found ${data.length} vector matches on page ${pageNumber}`);
+        return data;
+      } else {
+        console.log(`No vector matches found on page ${pageNumber}, falling back to full page content`);
+        // If no specific chunks match, return the whole page content
+        const { data: pageContentData, error: pageContentError } = await supabase
+          .from('book_pages')
+          .select('content')
+          .eq('id', pageId)
+          .single();
+          
+        if (pageContentError || !pageContentData?.content) {
+          return [];
+        }
+        
+        return [{
+          id: pageId,
+          content: pageContentData.content,
+          similarity: 1.0
+        }];
+      }
+    } else {
+      // Book-wide search
+      console.log(`Looking up context for the entire book with ID: ${bookId}`);
+      
+      // Generate embeddings for the query using Google Gemini API
+      const embedding = await generateEmbedding(query);
+      if (!embedding) {
+        throw new Error("Failed to generate embeddings for query");
+      }
+      
+      // Use the match_book_chunks function to find chunks across the whole book
+      const { data, error } = await supabase.rpc('match_book_chunks', {
+        query_embedding: embedding,
+        match_threshold: 0.4, // Lower threshold for book-wide searches to capture more context
+        match_count: 10, // Increase the number of chunks for full book context
+        p_book_id: bookId
+      });
+      
+      if (error) {
+        console.log(`Vector search error: ${error.message}`);
+        return [];
+      }
+      
+      if (data && data.length > 0) {
+        console.log(`Found ${data.length} vector matches across the book`);
+        return data;
+      } else {
+        console.log(`No vector matches found, trying keyword search`);
+        
+        // Fallback to keyword search if vector search yields no results
+        // Split query into keywords and search for them
+        const keywords = query.trim().toLowerCase().split(/\s+/)
+          .filter(word => word.length > 3) // Only use meaningful words
+          .map(word => word.replace(/[^\w]/g, '')); // Remove special chars
+          
+        if (keywords.length === 0) {
+          console.log(`No keywords found for search`);
+          return [];
+        }
+        
+        // Build a query to search for any of these keywords in the chunks
+        const { data: keywordData, error: keywordError } = await supabase
+          .from('book_chunks')
+          .select('id, content, book_id, page_id')
+          .eq('book_id', bookId)
+          .or(keywords.map(keyword => `content.ilike.%${keyword}%`).join(','))
+          .limit(10);
+          
+        if (keywordError || !keywordData || keywordData.length === 0) {
+          console.log(`No chunks found with keyword search either`);
+          return [];
+        }
+        
+        console.log(`Found ${keywordData.length} chunks using keyword search`);
+        return keywordData.map(chunk => ({
+          ...chunk,
+          similarity: 0.7 // Assign a default similarity score
+        }));
+      }
+    }
   } catch (error) {
-    console.error("Error initializing PDF.js worker:", error);
+    console.error(`Error finding relevant chunks: ${error.message}`);
+    return [];
   }
 }
 
-// Utility: get embeddings for text using Google Gemini
-async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
+// Function to generate embeddings using Google AI
+async function generateEmbedding(text: string) {
   try {
-    const response = await fetch("https://generativelanguage.googleapis.com/v1/models/embedding-001:embedContent?key=" + apiKey, {
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/embedding-001:embedContent?key=" + googleApiKey;
+    
+    const payload = {
+      model: "models/embedding-001",
+      content: {
+        parts: [{ text }]
+      }
+    };
+    
+    const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        content: {
-          parts: [
-            { text: text.replace(/\n/g, " ") }
-          ]
-        }
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
     });
-
+    
     if (!response.ok) {
-      const error = await response.json();
-      console.error("Embedding API error:", error);
-      throw new Error(error.error?.message || "Error getting embeddings");
+      const errorText = await response.text();
+      console.error(`Google AI API error: ${response.status} - ${errorText}`);
+      return null;
     }
-
+    
     const data = await response.json();
     return data.embedding.values;
   } catch (error) {
-    console.error("Error in getEmbedding:", error);
+    console.error(`Error generating embedding: ${error.message}`);
+    return null;
+  }
+}
+
+// Function to call Gemini API for chat completions
+async function callGeminiAPI(prompt: string, context: string, systemPrompt = "") {
+  try {
+    console.log("Calling Google Gemini API...");
+    
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + googleApiKey;
+    
+    const messages = [];
+    
+    // Add system prompt if provided
+    if (systemPrompt) {
+      messages.push({
+        role: "user",
+        parts: [{ text: systemPrompt }]
+      });
+      
+      messages.push({
+        role: "model",
+        parts: [{ text: "I understand and will respond accordingly." }]
+      });
+    }
+    
+    // Add context and user question
+    const contextAndPrompt = context ? 
+      `CONTEXT:\n${context}\n\nQUESTION:\n${prompt}\n\nAnswer based on the provided context only. If the question cannot be answered based on the context, say so.` : 
+      prompt;
+      
+    messages.push({
+      role: "user",
+      parts: [{ text: contextAndPrompt }]
+    });
+    
+    const payload = {
+      contents: messages,
+      generationConfig: {
+        temperature: 0.2,
+        topP: 0.8,
+        topK: 40,
+        maxOutputTokens: 1024
+      }
+    };
+    
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Google AI API error: ${response.status} - ${errorText}`);
+      throw new Error(`Google AI API error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data.candidates[0].content.parts[0].text;
+  } catch (error) {
+    console.error(`Error calling Gemini API: ${error.message}`);
     throw error;
   }
 }
 
-// Utility: create text chunks
-function createChunks(text: string, chunkSize: number = CHUNK_SIZE, overlap: number = CHUNK_OVERLAP): string[] {
-  const chunks: string[] = [];
-  let i = 0;
-  while (i < text.length) {
-    const chunk = text.slice(i, i + chunkSize);
-    chunks.push(chunk);
-    i += chunkSize - overlap;
-  }
-  return chunks;
-}
-
-// Add type declarations for Deno
-declare namespace Deno {
-  interface Env {
-    get(key: string): string | undefined;
-  }
-  export const env: Env;
-}
-
-// Define interfaces for our data structures
-interface BookPage {
-  id: string;
-  book_id: string;
-  user_id: string;
-  page_number: number;
-  content: string;
-  created_at: string;
-}
-
-interface BookChunk {
-  id?: string;
-  book_id: string;
-  page_id: string;
-  chunk_index: number;
-  content: string;
-  embedding: number[];
-  similarity?: number;
-}
-
-// Define a type for search results
-interface SearchResult extends BookChunk {
-  similarity: number;
-  page_number?: number;
-  book_title?: string;
-}
-
-// Process PDF: Extract text, create chunks, and generate embeddings
-async function processPdf(
-  pdfBytes: ArrayBuffer,
-  bookId: string,
-  userId: string,
-  supabase: any,
-  apiKey: string
-): Promise<{ success: boolean; pages: number; chunks: number; message?: string }> {
-  try {
-    // Load the PDF data
-    const pdfData = new Uint8Array(pdfBytes);
-    console.log(`Starting PDF extraction for book_id: ${bookId}, size: ${pdfData.length} bytes`);
-    
-    // Initialize PDF.js
-    await initPDFJS();
-    
-    try {
-      const loadingTask = pdfjs.getDocument({ data: pdfData });
-      const pdf = await loadingTask.promise;
-      console.log(`PDF loaded successfully with ${pdf.numPages} pages`);
-      
-      // Process each page to extract text
-      const pageTexts: string[] = [];
-      const pageIds: string[] = [];
-      const pageInserts: any[] = [];
-      
-      // Process in smaller batches to avoid memory issues
-      const BATCH_SIZE = 5; // Process 5 pages at a time
-      
-      // Update book with total pages count
-      await supabase
-        .from('books')
-        .update({ 
-          total_pages: pdf.numPages,
-          processing_status: 'Extracting text...' 
-        })
-        .eq('id', bookId);
-      
-      // Process pages in batches
-      for (let batchStart = 0; batchStart < pdf.numPages; batchStart += BATCH_SIZE) {
-        const batchEnd = Math.min(batchStart + BATCH_SIZE, pdf.numPages);
-        const batchPromises = [];
-        
-        for (let i = batchStart; i < batchEnd; i++) {
-          batchPromises.push((async () => {
-            try {
-              const pageNum = i + 1;
-              
-              // Update status for first page in batch or first overall page
-              if (i === batchStart || i === 0) {
-                await supabase
-                  .from('books')
-                  .update({ 
-                    processing_status: `Extracting text: page ${pageNum} of ${pdf.numPages}` 
-                  })
-                  .eq('id', bookId);
-              }
-              
-              // Get the page
-              const page = await pdf.getPage(pageNum);
-              
-              // Extract text content
-              const textContent = await page.getTextContent();
-              const pageText = textContent.items
-                .map((item: any) => item.str || '')
-                .join(' ');
-              
-              // Generate a unique ID for the page
-              const pageId = crypto.randomUUID();
-              
-              return {
-                pageText,
-                pageId,
-                pageInsert: {
-                  id: pageId,
-                  book_id: bookId,
-                  user_id: userId,
-                  page_number: pageNum,
-                  content: pageText,
-                  created_at: new Date().toISOString()
-                }
-              };
-            } catch (pageError) {
-              console.error(`Error processing page ${i + 1}:`, pageError);
-              return null;
-            }
-          })());
-        }
-        
-        // Wait for the batch to complete
-        const batchResults = await Promise.all(batchPromises);
-        
-        // Filter out any nulls from errors
-        const validResults = batchResults.filter(result => result !== null);
-        
-        // Store the page data
-        for (const result of validResults) {
-          if (!result) continue; // TypeScript safety - though we already filtered
-          
-          pageTexts.push(result.pageText);
-          pageIds.push(result.pageId);
-          pageInserts.push(result.pageInsert);
-        }
-        
-        // Insert pages in batch
-        if (pageInserts.length > 0) {
-          await supabase
-            .from('book_pages')
-            .insert(pageInserts);
-            
-          console.log(`Inserted batch of ${pageInserts.length} pages`);
-        }
-      }
-      
-      console.log(`Extracted text from ${pageTexts.length} pages`);
-      
-      // Update status - creating chunks
-      await supabase
-        .from('books')
-        .update({ 
-          processing_status: 'Creating text chunks and generating embeddings...' 
-        })
-        .eq('id', bookId);
-      
-      // Create chunks and get embeddings
-      let totalChunks = 0;
-      
-      // Process page chunks in batches
-      for (let pageIndex = 0; pageIndex < pageTexts.length; pageIndex++) {
-        const pageId = pageIds[pageIndex];
-        const pageText = pageTexts[pageIndex];
-        const pageNum = pageIndex + 1;
-        
-        // Update status every 10 pages
-        if (pageIndex % 10 === 0) {
-          await supabase
-            .from('books')
-            .update({ 
-              processing_status: `Processing embeddings: page ${pageNum} of ${pageTexts.length}` 
-            })
-            .eq('id', bookId);
-        }
-        
-        // Create chunks for this page
-        const chunks = createChunks(pageText);
-        
-        // Max 20 chunks per batch to avoid Gemini/OpenAI rate limits
-        const EMBEDDING_BATCH_SIZE = 20;
-        
-        for (let chunkBatchStart = 0; chunkBatchStart < chunks.length; chunkBatchStart += EMBEDDING_BATCH_SIZE) {
-          const chunkBatchEnd = Math.min(chunkBatchStart + EMBEDDING_BATCH_SIZE, chunks.length);
-          const currentChunkBatch = chunks.slice(chunkBatchStart, chunkBatchEnd);
-          
-          // Process chunks in parallel but with reasonable concurrency
-          const chunkPromises = currentChunkBatch.map(async (chunkText, i) => {
-            const chunkIndex = chunkBatchStart + i;
-            
-            try {
-              // Get embedding for chunk
-              const embedding = await getEmbedding(chunkText, apiKey);
-              
-              // Create chunk record
-              return {
-                book_id: bookId,
-                page_id: pageId,
-                chunk_index: chunkIndex,
-                content: chunkText,
-                embedding
-              };
-            } catch (error) {
-              console.error(`Error processing chunk ${chunkIndex} from page ${pageNum}:`, error);
-              return null;
-            }
-          });
-          
-          // Wait for all chunks in this batch to be processed
-          const chunkResults = await Promise.all(chunkPromises);
-          const validChunks = chunkResults.filter(chunk => chunk !== null);
-          
-          // Insert chunks in Supabase
-          if (validChunks.length > 0) {
-            await supabase
-              .from('book_chunks')
-              .insert(validChunks);
-              
-            totalChunks += validChunks.length;
-            console.log(`Inserted ${validChunks.length} chunks from page ${pageNum}, total: ${totalChunks}`);
-          }
-        }
-      }
-      
-      // Update book status when complete
-      await supabase
-        .from('books')
-        .update({ 
-          is_processed: true,
-          processing_status: 'Complete'
-        })
-        .eq('id', bookId);
-      
-      console.log(`PDF processing complete. Processed ${pageTexts.length} pages and ${totalChunks} chunks.`);
-      
-      return {
-        success: true,
-        pages: pageTexts.length,
-        chunks: totalChunks
-      };
-    } catch (error: any) {
-      console.error("Error in PDF processing:", error);
-      
-      // Update book with the error
-      await supabase
-        .from('books')
-        .update({ 
-          is_processed: false,
-          processing_status: `Error: ${error.message || "Unknown error in PDF processing"}` 
-        })
-        .eq('id', bookId);
-      
-      return {
-        success: false,
-        pages: 0,
-        chunks: 0,
-        message: error.message || "Unknown error in PDF processing"
-      };
-    }
-  } catch (error: any) {
-    console.error("Error in processPdf outer try/catch:", error);
-    
-    // Update book with the error
-    await supabase
-      .from('books')
-      .update({ 
-        is_processed: false,
-        processing_status: `Error: ${error.message || "Unknown error in PDF processing"}` 
-      })
-      .eq('id', bookId);
-    
-    return {
-      success: false,
-      pages: 0,
-      chunks: 0,
-      message: error.message || "Error in PDF processing"
-    };
-  }
-}
-
-// Semantic search to find relevant chunks - increase the limit to get more context
-async function findRelevantChunks(
-  query: string, 
-  bookId: string,
-  pageNumber: number | null,
-  supabase: any, 
-  apiKey: string,
-  limit: number = 10  // Increasing default limit to 10 for better context
-): Promise<string> {
-  try {
-    console.log("Finding relevant chunks for query:", query);
-    
-    // Get embedding for the query
-    const queryEmbedding = await getEmbedding(query, apiKey);
-    
-    // Search for relevant chunks using vector similarity
-    const { data: chunks, error } = await supabase
-      .rpc('match_book_chunks', {
-        query_embedding: queryEmbedding,
-        match_threshold: 0.2,  // Lower threshold to get more matches
-        match_count: limit * 2,  // Get more chunks than needed, then filter
-        p_book_id: bookId
-      });
-    
-    if (error) {
-      console.error("Error searching for chunks:", error);
-      return "";
-    }
-    
-    if (!chunks || chunks.length === 0) {
-      // Fallback to keyword search if vector search returns no results
-      console.log("No vector matches found, trying keyword search");
-      
-      // Extract keywords from query
-      const keywords = query.split(/\s+/)
-        .filter(word => word.length > 3)
-        .map(word => word.replace(/[^\w]/g, ''));
-      
-      if (keywords.length > 0) {
-        // Use basic text search for each keyword
-        const keywordPromises = keywords.map(async (keyword) => {
-          if (keyword.length < 3) return []; // Skip very short keywords
-          
-          const { data } = await supabase
-            .from('book_chunks')
-            .select('*')
-            .eq('book_id', bookId)
-            .ilike('content', `%${keyword}%`)
-            .limit(3);
-          
-          return data || [];
-        });
-        
-        const keywordResults = await Promise.all(keywordPromises);
-        chunks.push(...keywordResults.flat());
-      }
-      
-      if (!chunks || chunks.length === 0) {
-        console.log("No chunks found with keyword search either");
-        return "";
-      }
-    }
-    
-    // If we have a pageNumber, prioritize chunks from the current page
-    let enhancedChunks = await Promise.all(
-      chunks.map(async (chunk) => {
-        try {
-          // Get page info
-          const { data: page } = await supabase
-            .from('book_pages')
-            .select('page_number')
-            .eq('id', chunk.page_id)
-            .single();
-          
-          // Get book title
-          const { data: book } = await supabase
-            .from('books')
-            .select('title')
-            .eq('id', bookId)
-            .single();
-          
-          return {
-            ...chunk,
-            page_number: page?.page_number || 0,
-            book_title: book?.title || 'Unknown'
-          };
-        } catch (error) {
-          console.error("Error enhancing chunk:", error);
-          return {
-            ...chunk,
-            page_number: 0,
-            book_title: 'Unknown'
-          };
-        }
-      })
-    );
-    
-    // Remove duplicates based on content
-    const uniqueChunks = [];
-    const seenContent = new Set();
-    
-    for (const chunk of enhancedChunks) {
-      // Use first 100 chars as a fingerprint to avoid exact duplicates
-      const contentFingerprint = chunk.content.substring(0, 100);
-      if (!seenContent.has(contentFingerprint)) {
-        seenContent.add(contentFingerprint);
-        uniqueChunks.push(chunk);
-      }
-    }
-    
-    enhancedChunks = uniqueChunks;
-    
-    // Prioritize chunks from current page
-    if (pageNumber) {
-      enhancedChunks.sort((a, b) => {
-        // First prioritize by current page
-        if (a.page_number === pageNumber && b.page_number !== pageNumber) return -1;
-        if (a.page_number !== pageNumber && b.page_number === pageNumber) return 1;
-        
-        // Then by similarity
-        return (b.similarity || 0) - (a.similarity || 0);
-      });
-    } else {
-      // Otherwise sort by similarity (highest first)
-      enhancedChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
-    }
-    
-    // Now take only the top chunks after resorting
-    enhancedChunks = enhancedChunks.slice(0, limit);
-    
-    // Format the chunks with metadata, sorting by page number for readability
-    enhancedChunks.sort((a, b) => a.page_number - b.page_number);
-    
-    const contextText = enhancedChunks
-      .map((chunk, index) => 
-        `[EXCERPT FROM PAGE ${chunk.page_number}]\n${chunk.content}\n[END EXCERPT]`
-      )
-      .join('\n\n');
-    
-    console.log(`Found ${enhancedChunks.length} relevant chunks from ${new Set(enhancedChunks.map(c => c.page_number)).size} different pages`);
-    return contextText;
-  } catch (error) {
-    console.error("Error in findRelevantChunks:", error);
-    return "";
-  }
+// Function to generate a quiz based on content
+async function generateQuiz(content: string, relevantChunks: any[]) {
+  const context = relevantChunks.map(chunk => chunk.content).join('\n\n');
+  
+  const systemPrompt = `You are a helpful teaching assistant that creates engaging quiz questions. 
+  Generate 3 questions based on the provided content with multiple-choice answers. 
+  Format your response as follows:
+  
+  Q1: [Question]
+  A) [Option A]
+  B) [Option B]
+  C) [Option C]
+  D) [Option D]
+  
+  Q2: [Question]
+  ...
+  
+  ANSWERS:
+  Q1: [Correct option letter]
+  Q2: [Correct option letter]
+  ...
+  
+  EXPLANATIONS:
+  Q1: [Explanation of correct answer]
+  Q2: [Explanation of correct answer]
+  ...`;
+  
+  const prompt = "Create a quiz based on the following content.";
+  
+  return await callGeminiAPI(prompt, context, systemPrompt);
 }
 
 serve(async (req) => {
-  // Handle CORS preflight requests
+  // Handle CORS preflight request
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Debug logging for request and environment variables
-    console.log("Function triggered at:", new Date().toISOString());
-    console.log("Request headers:", Object.fromEntries([...req.headers.entries()]));
+    console.log("Function triggered at: " + new Date().toISOString());
+    console.log("Request headers:", req.headers);
     
-    // Create a clone of the request to read the body multiple times
-    const reqClone = req.clone();
-    let rawBody;
+    const reqBody = await req.text();
+    console.log("Raw request body:", reqBody);
+    
+    let body;
     try {
-      rawBody = await reqClone.text();
-      console.log("Raw request body:", rawBody);
-    } catch (readError) {
-      console.error("Error reading request body:", readError);
+      body = JSON.parse(reqBody);
+      console.log("Parsed request body:", body);
+    } catch (e) {
+      console.error("Error parsing request body:", e);
       return new Response(
-        JSON.stringify({ 
-          error: "Could not read request body",
-          success: false 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Invalid JSON" }),
+        { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
       );
     }
     
     // Check environment variables
-    console.log("GOOGLE_API_KEY exists:", !!Deno.env.get("GOOGLE_API_KEY"));
-    console.log("SUPABASE_URL exists:", !!Deno.env.get("SUPABASE_URL"));
-    console.log("SUPABASE_SERVICE_ROLE_KEY exists:", !!Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
+    console.log(`GOOGLE_API_KEY exists: ${Boolean(googleApiKey)}`);
+    console.log(`SUPABASE_URL exists: ${Boolean(supabaseUrl)}`);
+    console.log(`SUPABASE_SERVICE_ROLE_KEY exists: ${Boolean(supabaseServiceKey)}`);
     
-    // Parse request body safely
-    let requestBody;
-    try {
-      requestBody = JSON.parse(rawBody);
-      console.log("Parsed request body:", requestBody);
-    } catch (parseError) {
-      console.error("Failed to parse request body:", parseError);
-      return new Response(
-        JSON.stringify({ 
-          error: "Invalid JSON in request body", 
-          details: parseError.message,
-          success: false 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    // Extract parameters from request body
+    const endpoint = body.endpoint;
+    const mode = body.mode || 'chat';
+    const bookId = body.bookId || body.book_id;
+    const userId = body.userId || body.user_id;
+    const filePath = body.filePath || body.file_path;
+    const pageNumber = body.pageNumber;
+    const conversationId = body.conversationId || false;
+    const userQuestion = body.userQuestion || false;
+    const bookContent = body.bookContent || false;
+    const searchScope = body.searchScope || 'book'; // 'page' or 'book'
     
-    // Get necessary environment variables
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-    const apiKey = Deno.env.get("GOOGLE_API_KEY") || "";
-    
-    if (!apiKey) {
-      console.error("Missing API key: GOOGLE_API_KEY");
-      return new Response(
-        JSON.stringify({ 
-          error: "Missing API key: GOOGLE_API_KEY", 
-          success: false 
-        }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-      console.error("Missing Supabase credentials:", {
-        url: !!supabaseUrl,
-        serviceKey: !!supabaseServiceKey
-      });
-      return new Response(
-        JSON.stringify({ 
-          error: "Missing Supabase credentials", 
-          success: false 
-        }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Initialize Supabase client
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    
-    // Extract all possible parameter names for consistency
-    const { 
-      bookContent, 
-      userQuestion, 
-      conversationId, 
-      user,
-      user_id,
-      userId, 
-      mode = "chat",
-      bookId,
-      book_id,
-      pageNumber,
-      endpoint,
-      file_path
-    } = requestBody || {};
-
-    // Always use consistent parameter names
-    const effectiveBookId = book_id || bookId;
-    const effectiveUserId = user_id || userId || (user?.id);
-
     console.log("Extracted parameters:", {
       endpoint,
       mode,
-      book_id: effectiveBookId,
-      user_id: effectiveUserId,
-      file_path,
+      bookId,
+      userId,
+      filePath,
       pageNumber,
-      conversationId: !!conversationId,
-      userQuestion: !!userQuestion,
-      bookContent: !!bookContent
+      conversationId,
+      userQuestion,
+      bookContent,
+      searchScope
     });
+    
+    // Handle chat/quiz modes
+    if (mode === 'chat' || mode === 'quiz') {
+      // Ensure we have all required parameters
+      if (!bookId) {
+        throw new Error("Missing required parameter: bookId");
+      }
+      
+      if (mode === 'chat' && !userQuestion) {
+        throw new Error("Missing required parameter for chat mode: userQuestion");
+      }
 
-    // Add health check endpoint
-    if (endpoint === 'health-check') {
-      console.log("Health check request received");
-      const envCheck = {
-        apiKey: !!apiKey,
-        supabaseUrl: !!supabaseUrl,
-        supabaseServiceKey: !!supabaseServiceKey
-      };
+      // Find relevant chunks for the query
+      let relevantChunks: any[] = [];
+      let contextUsed = false;
+      
+      if (mode === 'chat') {
+        relevantChunks = await findRelevantChunks(userQuestion, bookId, pageNumber, searchScope as 'page' | 'book');
+      } else if (mode === 'quiz') {
+        // For quiz mode, get chunks from the current page or nearby
+        if (pageNumber) {
+          relevantChunks = await findRelevantChunks("quiz generation", bookId, pageNumber, searchScope as 'page' | 'book');
+        }
+      }
+      
+      let responseText = '';
+      
+      // If we found relevant chunks, use them for context
+      if (relevantChunks && relevantChunks.length > 0) {
+        contextUsed = true;
+        const context = relevantChunks.map(chunk => chunk.content).join('\n\n');
+        
+        if (mode === 'chat') {
+          try {
+            responseText = await callGeminiAPI(userQuestion, context);
+          } catch (error) {
+            console.error(`Failed to get AI response: ${error.message}`);
+            responseText = "I'm sorry, I encountered an error while processing your question.";
+            contextUsed = false;
+          }
+        } else if (mode === 'quiz') {
+          try {
+            responseText = await generateQuiz(bookContent, relevantChunks);
+          } catch (error) {
+            console.error(`Failed to generate quiz: ${error.message}`);
+            responseText = "I'm sorry, I couldn't generate a quiz at this time.";
+            contextUsed = false;
+          }
+        }
+      } else {
+        // No RAG context found, fall back to current page only
+        console.log("No RAG context found, falling back to current page only");
+        contextUsed = false;
+        
+        if (mode === 'chat') {
+          try {
+            responseText = await callGeminiAPI(userQuestion, bookContent ? bookContent : "");
+          } catch (error) {
+            console.error(`Failed to get AI response: ${error.message}`);
+            responseText = "I'm sorry, I encountered an error while processing your question.";
+          }
+        } else if (mode === 'quiz') {
+          try {
+            responseText = await generateQuiz(bookContent, [{ content: bookContent }]);
+          } catch (error) {
+            console.error(`Failed to generate quiz: ${error.message}`);
+            responseText = "I'm sorry, I couldn't generate a quiz at this time.";
+          }
+        }
+      }
+      
+      console.log(`Context used: ${contextUsed ? 'Yes' : 'No - using only current page'}`);
       
       return new Response(
-        JSON.stringify({ 
-          status: "ok", 
-          message: "Edge Function is running", 
-          env: envCheck,
-          timestamp: new Date().toISOString()
+        JSON.stringify({
+          response: responseText,
+          context_used: contextUsed,
+          mode: mode,
+          ...(mode === 'quiz' ? { quiz: responseText } : {})
         }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { 
+          status: 200, 
+          headers: { "Content-Type": "application/json", ...corsHeaders } 
+        }
       );
     }
-
-    // Handle book processing endpoint
-    if (endpoint === 'extract-pdf-text') {
-      console.log("Processing book:", effectiveBookId);
-      
-      // Validate required parameters
-      if (!effectiveBookId) {
-        console.error("Missing book_id parameter");
-        return new Response(
-          JSON.stringify({ 
-            error: "Missing required parameter: book_id", 
-            success: false 
-          }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      if (!effectiveUserId) {
-        console.error("Missing user_id parameter");
-        return new Response(
-          JSON.stringify({ 
-            error: "Missing required parameter: user_id", 
-            success: false 
-          }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      if (!file_path) {
-        console.error("Missing file_path parameter");
-        return new Response(
-          JSON.stringify({ 
-            error: "Missing required parameter: file_path", 
-            success: false 
-          }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      try {
-        // Update book status to indicate processing has started
-        await supabase
-          .from('books')
-          .update({ 
-            is_processed: false,
-            processing_status: 'Downloading PDF...' 
-          })
-          .eq('id', effectiveBookId);
-        
-        // Download the PDF from storage
-        const { data, error } = await supabase.storage
-          .from('books')
-          .download(file_path);
-        
-        if (error) {
-          console.error("Error downloading PDF:", error);
-          throw new Error(`Error downloading file: ${error.message}`);
-        }
-        
-        if (!data) {
-          console.error("No data returned from storage");
-          throw new Error("No data returned from storage");
-        }
-        
-        console.log("Successfully downloaded PDF, starting processing");
-        
-        // Process the PDF
-        const pdfBytes = await data.arrayBuffer();
-        const result = await processPdf(pdfBytes, effectiveBookId, effectiveUserId, supabase, apiKey);
-        
-        return new Response(
-          JSON.stringify({ 
-            success: result.success,
-            pages: result.pages,
-            chunks: result.chunks,
-            message: result.success ? 
-              `Successfully processed ${result.pages} pages and created ${result.chunks} chunks` :
-              result.message
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } catch (error: any) {
-        console.error("Error processing PDF:", error);
-        
-        // Update book with the error
-        try {
-          await supabase
-            .from('books')
-            .update({ 
-              is_processed: false,
-              processing_status: `Error: ${error.message || "Unknown error"}` 
-            })
-            .eq('id', effectiveBookId);
-        } catch (statusError) {
-          console.error("Failed to update error status:", statusError);
-        }
-        
-        return new Response(
-          JSON.stringify({ 
-            success: false, 
-            error: error.message || "Error processing PDF" 
-          }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
     
-    // Handle standard chat responses
-    // Default mode is chat if not specified
-    let systemPrompt = chatSystemPrompt;
-    let userPrompt = "";
-  
-    // Variables for context
-    let contextText = "";
-    let usedRag = false;
-    let bookTitle = "";
-    
-    // If we have a bookId, try to get the book title
-    if (effectiveBookId) {
-      try {
-        const { data: book } = await supabase
-          .from('books')
-          .select("title")
-          .eq("id", effectiveBookId)
-          .single();
-        
-        if (book) {
-          bookTitle = book.title;
-        }
-      } catch (error) {
-        console.error("Error fetching book title:", error);
-        // Continue without book title
-      }
-    }
-    
-    // ALWAYS get relevant chunks from the entire book for chat mode
-    if (effectiveBookId && mode === "chat") {
-      console.log("Looking up context for the entire book with ID:", effectiveBookId);
-      contextText = await findRelevantChunks(userQuestion, effectiveBookId, pageNumber, supabase, apiKey, 10);
-      usedRag = !!contextText;
-      
-      if (usedRag) {
-        console.log("Successfully found context from RAG");
-      } else {
-        console.log("No RAG context found, falling back to current page only");
-      }
-    }
-    
-    // Process based on mode
-    switch (mode) {
-      case "chat":
-        // Create a more detailed system prompt
-        const pageContext = pageNumber ? `The user is currently viewing page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
-        systemPrompt = chatSystemPrompt + (pageContext ? `\n\n${pageContext}` : '');
-        
-        // Add clarity on using RAG content
-        systemPrompt += `\n\nWhen provided with excerpts from the book, only use information from those excerpts to answer. Don't make up information that isn't in the excerpts. If the excerpts don't contain the answer, say so clearly and suggest what might help.`;
-        
-        // Create user prompt
-        if (contextText) {
-          userPrompt = `I'll provide you with relevant excerpts from the book that match the user's question. Your job is to answer based ONLY on these excerpts:\n\n${contextText}\n\nUser's question: ${userQuestion}\n\nProvide a clear, direct answer that addresses the question specifically using information from these excerpts. If the answer isn't found in the excerpts, acknowledge that and suggest what might help. Be conversational but avoid unnecessary commentary.`;
-        } else {
-          userPrompt = `Here is text content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}:\n\n"""${bookContent}"""\n\nUser's question: ${userQuestion}\n\nBased ONLY on the provided page content, answer the question directly and concisely. If the answer isn't in this text, acknowledge that limitation clearly.`;
-        }
-        
-        // Add page reference
-        if (pageNumber) {
-          userPrompt += `\n\nNote: This answer is based on content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}.`;
-        }
-        break;
-      
-      case "quiz":
-        // Add page number context
-        const quizPageContext = pageNumber ? `Generate questions based on content from page ${pageNumber}${bookTitle ? ` of the book titled "${bookTitle}"` : ''}.` : '';
-        systemPrompt = quizSystemPrompt + (quizPageContext ? `\n\n${quizPageContext}` : '');
-        
-        // Enhance with RAG context if available
-        userPrompt = `Here is the text content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''} to generate quiz questions about:\n"""${contextText || bookContent}"""\n\nGenerate ${3} multiple-choice questions based ONLY on this text from page ${pageNumber}.
-Ensure each question has a clear correct answer that can be found in or directly inferred from the text.`;
-        
-        // Add page reference
-        if (pageNumber) {
-          userPrompt += `\n\nNote: This quiz is based on content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}.`;
-        }
-        break;
-      
-      case "quizEvaluation":
-        systemPrompt = quizEvalSystemPrompt;
-        
-        // This should extract these from the request body
-        const { question, options, correctIndex, userAnswerIndex } = requestBody;
-        
-        if (!question || !options || correctIndex === undefined || userAnswerIndex === undefined) {
-          throw new Error("Missing quiz evaluation parameters");
-        }
-        
-        userPrompt = `Question: ${question}\n\nOptions:\n${options.map((opt: string, i: number) => `${String.fromCharCode(65 + i)}. ${opt}`).join('\n')}\n\nCorrect Answer: ${String.fromCharCode(65 + correctIndex)} (${options[correctIndex]})\nUser's Answer: ${String.fromCharCode(65 + userAnswerIndex)} (${options[userAnswerIndex]})\n\nText Content:\n"""${bookContent}"""\n\n${userAnswerIndex === correctIndex ? "The answer is CORRECT. " : "The answer is INCORRECT. "}Please provide detailed feedback on the user's answer.`;
-        
-        // Add page reference
-        if (pageNumber) {
-          userPrompt += `\n\nNote: This question is based on content from page ${pageNumber}${bookTitle ? ` of "${bookTitle}"` : ''}.`;
-        }
-        break;
-      
-      default:
-        throw new Error(`Unsupported mode: ${mode}`);
-    }
-    
-    console.log("Calling Google Gemini API...");
-    console.log("Context used:", usedRag ? "Yes - found relevant chunks" : "No - using only current page");
-    
-    // Call Google Gemini API
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          { role: "user", parts: [{ text: systemPrompt }] },
-          { role: "model", parts: [{ text: "I understand. I'll act as an AI assistant for book readers as instructed." }] },
-          { role: "user", parts: [{ text: userPrompt }] }
-        ],
-        generationConfig: {
-          temperature: mode === "quiz" ? 0.7 : 0.3,
-          maxOutputTokens: 1024,
-        },
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error("Google Gemini API error:", errorData);
-      throw new Error(`Google Gemini API error: ${errorData}`);
-    }
-    
-    const result = await response.json();
-    const aiResponse = result.candidates[0].content.parts[0].text;
-    
-    // Save message in database if this is a chat with conversation ID
-    if (mode === "chat" && conversationId && effectiveUserId) {
-      try {
-        await supabase.from('ai_messages').insert({
-          conversation_id: conversationId,
-          role: 'assistant',
-          content: aiResponse,
-        });
-      } catch (dbError) {
-        console.error("Error saving message to database:", dbError);
-        // Continue despite database error
-      }
-    }
-    
-    // Return the AI response
+    // If we get here, the request was for an endpoint we don't support
     return new Response(
-      JSON.stringify({
-        response: aiResponse,
-        context_used: usedRag,
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ error: "Invalid endpoint or mode" }),
+      { status: 400, headers: { "Content-Type": "application/json", ...corsHeaders } }
     );
     
   } catch (error) {
-    console.error("Error in AI assistant function:", error);
-    
+    console.error("Error processing request:", error);
     return new Response(
-      JSON.stringify({ 
-        error: error.message || "An unknown error occurred", 
-        success: false
-      }),
-      { 
-        status: 200, // Always return 200 to avoid CORS issues, client will handle the error
-        headers: { ...corsHeaders, "Content-Type": "application/json" } 
-      }
+      JSON.stringify({ error: error.message || "Unknown error" }),
+      { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }
     );
   }
 });
