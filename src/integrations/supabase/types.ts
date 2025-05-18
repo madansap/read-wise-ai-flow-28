@@ -92,7 +92,7 @@ export type Database = {
           chunk_index: number
           content: string
           created_at: string | null
-          embedding: string | null
+          embedding: string
           id: string
           page_id: string
         }
@@ -101,7 +101,7 @@ export type Database = {
           chunk_index: number
           content: string
           created_at?: string | null
-          embedding?: string | null
+          embedding: string
           id?: string
           page_id: string
         }
@@ -110,7 +110,7 @@ export type Database = {
           chunk_index?: number
           content?: string
           created_at?: string | null
-          embedding?: string | null
+          embedding?: string
           id?: string
           page_id?: string
         }
@@ -130,6 +130,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      book_chunks_backup: {
+        Row: {
+          book_id: string | null
+          chunk_index: number | null
+          content: string | null
+          created_at: string | null
+          embedding: string | null
+          id: string | null
+          page_id: string | null
+        }
+        Insert: {
+          book_id?: string | null
+          chunk_index?: number | null
+          content?: string | null
+          created_at?: string | null
+          embedding?: string | null
+          id?: string | null
+          page_id?: string | null
+        }
+        Update: {
+          book_id?: string | null
+          chunk_index?: number | null
+          content?: string | null
+          created_at?: string | null
+          embedding?: string | null
+          id?: string | null
+          page_id?: string | null
+        }
+        Relationships: []
       }
       book_pages: {
         Row: {
@@ -333,6 +363,7 @@ export type Database = {
           page_id: string
           chunk_index: number
           content: string
+          embedding: string
           similarity: number
         }[]
       }

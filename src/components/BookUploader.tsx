@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
@@ -76,8 +77,8 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       while (uploadAttempts < maxUploadAttempts) {
         try {
           const { error } = await supabase.storage
-        .from('books')
-        .upload(filePath, file);
+            .from('books')
+            .upload(filePath, file);
           
           if (!error) {
             uploadError = null;
@@ -109,17 +110,17 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       let insertAttempts = 0;
       const maxInsertAttempts = 2;
       let bookId = null;
-      let currentInsertError = null;
+      let insertError = null;
       
       while (insertAttempts < maxInsertAttempts) {
         try {
           const { data, error } = await supabase
-        .from('books')
-        .insert({
-          title: metadata.title,
-          author: metadata.author || null,
-          file_path: filePath,
-          file_type: file.type,
+            .from('books')
+            .insert({
+              title: metadata.title,
+              author: metadata.author || null,
+              file_path: filePath,
+              file_type: file.type,
               user_id: user.id,
               is_processed: false,
               processing_status: 'Queued for processing'
@@ -128,11 +129,11 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             .single();
 
           if (error) {
-            currentInsertError = error;
+            insertError = error;
             insertAttempts++;
           } else {
             bookId = data.id;
-            currentInsertError = null;
+            insertError = null;
             break; // Success, exit loop
           }
           
@@ -140,7 +141,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             await new Promise(resolve => setTimeout(resolve, 1000));
           }
         } catch (err) {
-          currentInsertError = err;
+          insertError = err;
           insertAttempts++;
           console.error(`Book metadata insert attempt ${insertAttempts} error:`, err);
           
@@ -150,7 +151,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
         }
       }
       
-      if (currentInsertError || !bookId) throw currentInsertError || new Error("Failed to insert book metadata");
+      if (insertError || !bookId) throw insertError || new Error("Failed to insert book metadata");
       
       // Step 3: Trigger the PDF processing function with more robust retry logic
       toast({
@@ -175,10 +176,10 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             
             // Prepare all required params explicitly
             const processingParams = {
-              book_id: bookId,  // Use book_id consistently
+              book_id: bookId,
               user_id: user.id,
               file_path: filePath,
-              endpoint: 'extract-pdf-text' // Add endpoint information in the body
+              endpoint: 'extract-pdf-text' 
             };
             
             console.log("Sending processing request with params:", {
@@ -225,7 +226,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             title: "Processing started with warnings",
             description: "Your book was uploaded but processing may be delayed. You can try manual processing from the library.",
             variant: "destructive",
-      });
+          });
         } else {
           toast({
             title: "Processing initiated",

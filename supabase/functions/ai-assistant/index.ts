@@ -1,3 +1,4 @@
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -506,8 +507,20 @@ serve(async (req) => {
     
     // Create a clone of the request to read the body multiple times
     const reqClone = req.clone();
-    const rawBody = await reqClone.text();
-    console.log("Raw request body:", rawBody);
+    let rawBody;
+    try {
+      rawBody = await reqClone.text();
+      console.log("Raw request body:", rawBody);
+    } catch (readError) {
+      console.error("Error reading request body:", readError);
+      return new Response(
+        JSON.stringify({ 
+          error: "Could not read request body",
+          success: false 
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
     
     // Check environment variables
     console.log("GOOGLE_API_KEY exists:", !!Deno.env.get("GOOGLE_API_KEY"));
@@ -564,25 +577,31 @@ serve(async (req) => {
     // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
+    // Extract all possible parameter names for consistency
     const { 
       bookContent, 
       userQuestion, 
       conversationId, 
-      user, 
+      user,
+      user_id,
+      userId, 
       mode = "chat",
       bookId,
+      book_id,
       pageNumber,
       endpoint,
-      file_path,
-      user_id,
-      book_id
+      file_path
     } = requestBody || {};
+
+    // Always use consistent parameter names
+    const effectiveBookId = book_id || bookId;
+    const effectiveUserId = user_id || userId || (user?.id);
 
     console.log("Extracted parameters:", {
       endpoint,
       mode,
-      book_id: book_id || bookId,
-      user_id,
+      book_id: effectiveBookId,
+      user_id: effectiveUserId,
       file_path,
       conversationId: !!conversationId,
       userQuestion: !!userQuestion,
@@ -611,11 +630,7 @@ serve(async (req) => {
 
     // Handle book processing endpoint
     if (endpoint === 'extract-pdf-text') {
-      console.log("Processing book:", bookId || book_id);
-      
-      // Use consistent parameter naming
-      const effectiveBookId = bookId || book_id;
-      const effectiveUserId = user_id || (user?.id);
+      console.log("Processing book:", effectiveBookId);
       
       // Validate required parameters
       if (!effectiveBookId) {
@@ -730,8 +745,7 @@ serve(async (req) => {
     let bookTitle = "";
     
     // If we have a bookId, try to get the book title
-    if (bookId || book_id) {
-      const effectiveBookId = bookId || book_id;
+    if (effectiveBookId) {
       try {
         const { data: book } = await supabase
           .from('books')
@@ -749,8 +763,7 @@ serve(async (req) => {
     }
     
     // Get relevant chunks if needed for chat or quiz
-    if ((bookId || book_id) && (mode === "chat" || mode === "quiz")) {
-      const effectiveBookId = bookId || book_id;
+    if (effectiveBookId && (mode === "chat" || mode === "quiz")) {
       const searchQuery = mode === "chat" ? userQuestion : "key concepts and important information";
       contextText = await findRelevantChunks(searchQuery, effectiveBookId, pageNumber, supabase, apiKey);
       usedRag = !!contextText;
@@ -847,7 +860,7 @@ Ensure each question has a clear correct answer that can be found in or directly
     const aiResponse = result.candidates[0].content.parts[0].text;
     
     // Save message in database if this is a chat with conversation ID
-    if (mode === "chat" && conversationId && user) {
+    if (mode === "chat" && conversationId && effectiveUserId) {
       try {
         await supabase.from('ai_messages').insert({
           conversation_id: conversationId,

@@ -1,9 +1,16 @@
 
 import { useState } from 'react'
-import { Toast } from "@/components/ui/toast"
+
+export interface Toast {
+  id: string;
+  title?: string;
+  description?: string;
+  action?: React.ReactNode;
+  variant?: "default" | "destructive";
+}
 
 export function useToast() {
-  const [toasts, setToasts] = useState<any[]>([])
+  const [toasts, setToasts] = useState<Toast[]>([])
 
   const toast = ({
     ...props
