@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +26,7 @@ const AIAssistantPanel = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { user } = useAuth();
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const { currentBookId, currentPage, currentPageText } = useReading();
 
   // Load conversation history on mount
   useEffect(() => {
@@ -58,11 +60,12 @@ const AIAssistantPanel = () => {
 
       if (error) throw error;
 
-      const formattedMessages = data.map(msg => ({
+      const formattedMessages: Message[] = data.map(msg => ({
         id: msg.id,
-        role: msg.role,
+        role: msg.role as 'user' | 'assistant',
         content: msg.content,
         timestamp: new Date(msg.created_at).toISOString(),
+        context_used: msg.context_used
       }));
 
       setMessages(formattedMessages);
@@ -84,7 +87,7 @@ const AIAssistantPanel = () => {
       setIsSubmitting(true);
       
       // Add message to history immediately for better UX
-      const userMessage = {
+      const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
         content: message,
@@ -93,9 +96,6 @@ const AIAssistantPanel = () => {
       
       setMessages(prev => [...prev, userMessage]);
       setMessage('');
-
-      // Use the current book ID from the reading context
-      const { currentBookId, currentPage, currentPageText } = useReading();
       
       if (!currentBookId) {
         toast({
@@ -123,7 +123,7 @@ const AIAssistantPanel = () => {
       }
 
       // Add AI response to message history
-      const aiResponse = {
+      const aiResponse: Message = {
         id: uuidv4(),
         role: 'assistant',
         content: response.data.response || "Sorry, I couldn't process your request",
