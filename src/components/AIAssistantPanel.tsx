@@ -3,15 +3,16 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
-import { Send, RefreshCcw, BookOpen } from 'lucide-react';
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { Send, RefreshCcw, BookOpen, BookOpenCheck } from 'lucide-react';
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
 import { v4 as uuidv4 } from 'uuid';
 import { useReading } from '@/contexts/ReadingContext';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 
 interface Message {
   id: string;
@@ -112,6 +113,9 @@ const AIAssistantPanel = () => {
         return;
       }
 
+      // Log the search scope to verify it's being used correctly
+      console.log(`Asking question with search scope: ${searchScope}`);
+
       // Call the AI assistant function with the book ID, page number, and user message
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
@@ -120,7 +124,7 @@ const AIAssistantPanel = () => {
           pageNumber: currentPage,
           bookContent: currentPageText,
           mode: 'chat',
-          searchScope: searchScope
+          searchScope: searchScope // Make sure we're passing the current search scope
         }
       });
 
@@ -161,13 +165,16 @@ const AIAssistantPanel = () => {
       setIsGeneratingQuiz(true);
       setActiveTab('quiz');
 
+      // Log the search scope to verify it's being used correctly
+      console.log(`Generating quiz with search scope: ${searchScope}`);
+
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           bookId: currentBookId,
           pageNumber: currentPage,
           bookContent: currentPageText,
           mode: 'quiz',
-          searchScope: searchScope
+          searchScope: searchScope // Make sure we're passing the current search scope
         }
       });
 
@@ -208,7 +215,15 @@ const AIAssistantPanel = () => {
   };
 
   const toggleSearchScope = () => {
-    setSearchScope(prev => prev === 'page' ? 'book' : 'page');
+    const newScope = searchScope === 'page' ? 'book' : 'page';
+    setSearchScope(newScope);
+    console.log(`Search scope switched to: ${newScope}`);
+    
+    // Show toast to confirm search scope change
+    toast({
+      title: `Context mode: ${newScope === 'page' ? 'Current Page Only' : 'Entire Book'}`,
+      description: `AI will now use ${newScope === 'page' ? 'only the current page' : 'the entire book'} for context.`,
+    });
   };
 
   return (
@@ -231,11 +246,11 @@ const AIAssistantPanel = () => {
                       <div className={`rounded-lg p-3 text-sm ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'}`}>
                         {msg.content}
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {msg.role === 'assistant' && msg.context_used && (
-                          <span className="mr-2">
-                            <span className="font-medium">AI</span> used book content
-                          </span>
+                      <div className="text-xs text-muted-foreground mt-1 flex items-center">
+                        {msg.role === 'assistant' && msg.context_used !== undefined && (
+                          <Badge variant={msg.context_used ? "default" : "outline"} className="mr-2 text-[10px] h-5">
+                            {msg.context_used ? 'Using book context' : 'No book context found'}
+                          </Badge>
                         )}
                         {new Date(msg.timestamp).toLocaleTimeString()}
                       </div>
@@ -254,8 +269,17 @@ const AIAssistantPanel = () => {
                 onClick={toggleSearchScope}
                 className="text-xs"
               >
-                <BookOpen className="h-3 w-3 mr-1" />
-                {searchScope === 'page' ? 'Current Page Only' : 'Entire Book Context'}
+                {searchScope === 'page' ? (
+                  <>
+                    <BookOpen className="h-3 w-3 mr-1" />
+                    Current Page Only
+                  </>
+                ) : (
+                  <>
+                    <BookOpenCheck className="h-3 w-3 mr-1" />
+                    Entire Book Context
+                  </>
+                )}
               </Button>
             </div>
 
@@ -285,7 +309,12 @@ const AIAssistantPanel = () => {
                       <div className="rounded-lg p-3 text-sm bg-secondary text-secondary-foreground">
                         {msg.content}
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1">
+                      <div className="text-xs text-muted-foreground mt-1 flex items-center">
+                        {msg.context_used !== undefined && (
+                          <Badge variant={msg.context_used ? "default" : "outline"} className="mr-2 text-[10px] h-5">
+                            {msg.context_used ? 'Using book context' : 'No book context found'}
+                          </Badge>
+                        )}
                         {new Date(msg.timestamp).toLocaleTimeString()}
                       </div>
                     </div>
@@ -307,7 +336,7 @@ const AIAssistantPanel = () => {
                   Generating quiz...
                 </>
               ) : (
-                <>Generate Quiz from {searchScope === 'page' ? 'Current Page' : 'Book Content'}</>
+                <>Generate Quiz from {searchScope === 'page' ? 'Current Page' : 'Entire Book'}</>
               )}
             </Button>
           </div>
