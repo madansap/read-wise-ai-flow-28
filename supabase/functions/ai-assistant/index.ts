@@ -1,4 +1,3 @@
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
@@ -12,7 +11,7 @@ import {
   explainSelectionUserPromptTemplate
 } from "./prompts.ts";
 import { PDFDocument } from "https://esm.sh/pdf-lib@1.17.1";
-import * as pdfjs from "pdfjs-dist/build/pdf.js";
+import * as pdfjs from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.js";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,8 +30,8 @@ const PDFJS_WORKER_SRC = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSIO
 // Initialize PDF.js with worker
 async function initPDFJS() {
   try {
-    const pdfjsWorker = await import("pdfjs-dist/build/pdf.worker.entry");
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_SRC;
+    console.log('PDF.js worker configured with version:', PDFJS_VERSION);
   } catch (error) {
     console.error("Error initializing PDF.js worker:", error);
   }
