@@ -65,7 +65,8 @@ const AIAssistantPanel = () => {
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
         timestamp: new Date(msg.created_at).toISOString(),
-        context_used: msg.context_used
+        // Since context_used doesn't exist in the database, we'll set it to undefined
+        // This is safe because we made the property optional in our Message interface
       }));
 
       setMessages(formattedMessages);
