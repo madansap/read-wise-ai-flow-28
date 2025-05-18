@@ -18,7 +18,7 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  context_used?: boolean;
+  context_used?: boolean; // Make context_used optional
 }
 
 const AIAssistantPanel = () => {
@@ -64,13 +64,13 @@ const AIAssistantPanel = () => {
 
       if (error) throw error;
 
+      // Transform database messages to our Message format
+      // Note: database objects don't have context_used field
       const formattedMessages: Message[] = data.map(msg => ({
         id: msg.id,
         role: msg.role as 'user' | 'assistant',
         content: msg.content,
         timestamp: new Date(msg.created_at).toISOString(),
-        // Since context_used doesn't exist in the database, we'll set it to undefined
-        // This is safe because we made the property optional in our Message interface
       }));
 
       setMessages(formattedMessages);
