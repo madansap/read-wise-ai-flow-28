@@ -4,15 +4,19 @@ import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Upload } from 'lucide-react';
+import { Upload, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/components/ui/use-toast';
 import { v4 as uuidv4 } from 'uuid';
+import { Progress } from '@/components/ui/progress';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStage, setUploadStage] = useState<'idle' | 'uploading' | 'processing'>('idle');
   const [metadata, setMetadata] = useState({
     title: '',
     author: ''
@@ -64,6 +68,8 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
 
     try {
       setIsUploading(true);
+      setUploadStage('uploading');
+      setUploadProgress(0);
 
       // Step 1: Upload file to Supabase Storage
       const fileExt = file.name.split('.').pop();
@@ -73,6 +79,14 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       let uploadAttempts = 0;
       const maxUploadAttempts = 3;
       let uploadError = null;
+      
+      // Simulate upload progress
+      const uploadTimer = setInterval(() => {
+        setUploadProgress(prev => {
+          const newProgress = prev + 5;
+          return newProgress > 85 ? 85 : newProgress;
+        });
+      }, 300);
       
       while (uploadAttempts < maxUploadAttempts) {
         try {
@@ -103,6 +117,9 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
           }
         }
       }
+
+      clearInterval(uploadTimer);
+      setUploadProgress(90);
 
       if (uploadError) throw uploadError;
 
@@ -153,10 +170,13 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       
       if (insertError || !bookId) throw insertError || new Error("Failed to insert book metadata");
       
-      // Step 3: Trigger the PDF processing function with more robust retry logic
+      // Step 3: Trigger the PDF processing function
+      setUploadStage('processing');
+      setUploadProgress(95);
+      
       toast({
         title: "Book uploaded",
-        description: "Your book is being processed. This may take a few minutes.",
+        description: "Your book is being processed. This may take a few minutes depending on the size.",
       });
       
       try {
@@ -182,11 +202,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
               endpoint: 'extract-pdf-text' 
             };
             
-            console.log("Sending processing request with params:", {
-              bookId,
-              userId: user.id,
-              filePath
-            });
+            console.log("Sending processing request with params:", processingParams);
             
             // Call the extract-pdf-text endpoint with all required parameters
             const response = await supabase.functions.invoke('ai-assistant', {
@@ -194,7 +210,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             });
             
             if (response.error) {
-              throw response.error;
+              throw new Error(response.error.message || "Function invocation failed");
             }
             
             // Check for success field in the response data
@@ -218,6 +234,8 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
             }
           }
         }
+        
+        setUploadProgress(100);
         
         if (processingError) {
           console.error("All processing attempts failed:", processingError);
@@ -247,6 +265,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
       // Reset form
       setFile(null);
       setMetadata({ title: '', author: '' });
+      setUploadStage('idle');
     } catch (error: any) {
       console.error("Upload error:", error);
       toast({
@@ -254,6 +273,7 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
         description: error.message || "Something went wrong",
         variant: "destructive",
       });
+      setUploadStage('idle');
     } finally {
       setIsUploading(false);
     }
@@ -312,12 +332,31 @@ const BookUploader = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => 
                 />
               </div>
 
+              {uploadStage !== 'idle' && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>{uploadStage === 'uploading' ? 'Uploading file...' : 'Processing book...'}</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <Progress value={uploadProgress} className="h-2" />
+                  
+                  {uploadStage === 'processing' && (
+                    <Alert variant="default" className="bg-blue-50 mt-2">
+                      <AlertCircle className="h-4 w-4 text-blue-500" />
+                      <AlertDescription className="text-xs text-blue-700">
+                        Book processing may take several minutes for larger books. You can continue using the app, and the book will be available when processing completes.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+              )}
+
               <Button 
                 className="w-full" 
                 onClick={handleUpload}
                 disabled={isUploading || !metadata.title}
               >
-                {isUploading ? "Uploading..." : "Upload Book"}
+                {isUploading ? "Processing..." : "Upload Book"}
               </Button>
             </>
           )}

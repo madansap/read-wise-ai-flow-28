@@ -13,13 +13,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { useReading } from '@/contexts/ReadingContext';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  context_used?: boolean; // Make context_used optional
+  context_used?: boolean; // Optional field to track if context was used
 }
 
 const AIAssistantPanel = () => {
@@ -32,6 +33,44 @@ const AIAssistantPanel = () => {
   const { currentBookId, currentPage, currentPageText } = useReading();
   const [searchScope, setSearchScope] = useState<'page' | 'book'>('book');
   const [activeTab, setActiveTab] = useState('chat');
+  const [isBookProcessed, setIsBookProcessed] = useState<boolean | null>(null);
+
+  // Check if the current book is processed
+  useEffect(() => {
+    const checkBookProcessingStatus = async () => {
+      if (!currentBookId) {
+        setIsBookProcessed(null);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('books')
+          .select('is_processed, processing_status')
+          .eq('id', currentBookId)
+          .single();
+
+        if (error) throw error;
+
+        setIsBookProcessed(data.is_processed || false);
+        
+        // If the book isn't processed, show a warning toast
+        if (!data.is_processed) {
+          toast({
+            title: "Book not fully processed",
+            description: "AI may have limited knowledge of the book content. Processing status: " + 
+                        (data.processing_status || "Not processed"),
+            variant: "warning",
+          });
+        }
+      } catch (error) {
+        console.error("Error checking book processing status:", error);
+        setIsBookProcessed(null);
+      }
+    };
+
+    checkBookProcessingStatus();
+  }, [currentBookId]);
 
   // Load conversation history on mount
   useEffect(() => {
@@ -85,7 +124,7 @@ const AIAssistantPanel = () => {
     }
   };
 
-  // Ensure we're passing the bookId to the AI assistant when asking questions
+  // Ensure we're passing the bookId and searchScope to the AI assistant when asking questions
   const handleAskQuestion = async () => {
     if (!message.trim() || isSubmitting) return;
 
@@ -116,7 +155,7 @@ const AIAssistantPanel = () => {
       // Log the search scope to verify it's being used correctly
       console.log(`Asking question with search scope: ${searchScope}`);
 
-      // Call the AI assistant function with the book ID, page number, and user message
+      // Call the AI assistant function with the book ID, page number, search scope and user message
       const response = await supabase.functions.invoke('ai-assistant', {
         body: {
           userQuestion: message,
@@ -144,6 +183,20 @@ const AIAssistantPanel = () => {
       setMessages(prev => [...prev, aiResponse]);
 
       // Save to conversation history if needed
+      if (conversationId) {
+        await supabase.from('ai_messages').insert([
+          {
+            conversation_id: conversationId,
+            role: 'user',
+            content: userMessage.content
+          },
+          {
+            conversation_id: conversationId,
+            role: 'assistant',
+            content: aiResponse.content
+          }
+        ]);
+      }
       
     } catch (error: any) {
       console.error("Error asking question:", error);
@@ -193,6 +246,17 @@ const AIAssistantPanel = () => {
 
       setMessages(prev => [...prev, quizMessage]);
 
+      // Save to conversation history if needed
+      if (conversationId) {
+        await supabase.from('ai_messages').insert([
+          {
+            conversation_id: conversationId,
+            role: 'assistant',
+            content: quizMessage.content
+          }
+        ]);
+      }
+
     } catch (error: any) {
       console.error("Error generating quiz:", error);
       toast({
@@ -224,6 +288,15 @@ const AIAssistantPanel = () => {
       title: `Context mode: ${newScope === 'page' ? 'Current Page Only' : 'Entire Book'}`,
       description: `AI will now use ${newScope === 'page' ? 'only the current page' : 'the entire book'} for context.`,
     });
+    
+    // If switching to book scope but book isn't processed, warn the user
+    if (newScope === 'book' && isBookProcessed === false) {
+      toast({
+        title: "Book not fully processed",
+        description: "The book hasn't been fully processed yet, so the AI's knowledge of the entire book may be limited.",
+        variant: "warning",
+      });
+    }
   };
 
   return (
@@ -248,9 +321,26 @@ const AIAssistantPanel = () => {
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 flex items-center">
                         {msg.role === 'assistant' && msg.context_used !== undefined && (
-                          <Badge variant={msg.context_used ? "default" : "outline"} className="mr-2 text-[10px] h-5">
-                            {msg.context_used ? 'Using book context' : 'No book context found'}
-                          </Badge>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge 
+                                  variant={msg.context_used ? "default" : "outline"} 
+                                  className={`mr-2 text-[10px] h-5 ${!msg.context_used && isBookProcessed === false ? "bg-amber-100 text-amber-800 hover:bg-amber-200" : ""}`}
+                                >
+                                  {msg.context_used ? 'Using book context' : 'No book context found'}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {msg.context_used 
+                                  ? 'Response generated using context from the book' 
+                                  : isBookProcessed === false 
+                                    ? 'Book processing incomplete. Try "Process Book Content" from library menu'
+                                    : 'No relevant context found in the book'
+                                }
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                         {new Date(msg.timestamp).toLocaleTimeString()}
                       </div>
@@ -263,24 +353,43 @@ const AIAssistantPanel = () => {
           
           <div className="p-4 border-t">
             <div className="flex items-center justify-between mb-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={toggleSearchScope}
-                className="text-xs"
-              >
-                {searchScope === 'page' ? (
-                  <>
-                    <BookOpen className="h-3 w-3 mr-1" />
-                    Current Page Only
-                  </>
-                ) : (
-                  <>
-                    <BookOpenCheck className="h-3 w-3 mr-1" />
-                    Entire Book Context
-                  </>
-                )}
-              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={toggleSearchScope}
+                      className="text-xs"
+                    >
+                      {searchScope === 'page' ? (
+                        <>
+                          <BookOpen className="h-3 w-3 mr-1" />
+                          Current Page Only
+                        </>
+                      ) : (
+                        <>
+                          <BookOpenCheck className="h-3 w-3 mr-1" />
+                          Entire Book Context
+                        </>
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {searchScope === 'page'
+                      ? "AI will only use the current page for context"
+                      : isBookProcessed === false 
+                        ? "Book content may not be fully processed yet, limiting AI's knowledge"
+                        : "AI will use the entire book for context"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              
+              {isBookProcessed === false && searchScope === 'book' && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">
+                  Book processing incomplete
+                </Badge>
+              )}
             </div>
 
             <form onSubmit={handleSubmit} className="flex items-center space-x-2">
@@ -311,9 +420,26 @@ const AIAssistantPanel = () => {
                       </div>
                       <div className="text-xs text-muted-foreground mt-1 flex items-center">
                         {msg.context_used !== undefined && (
-                          <Badge variant={msg.context_used ? "default" : "outline"} className="mr-2 text-[10px] h-5">
-                            {msg.context_used ? 'Using book context' : 'No book context found'}
-                          </Badge>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge 
+                                  variant={msg.context_used ? "default" : "outline"} 
+                                  className={`mr-2 text-[10px] h-5 ${!msg.context_used && isBookProcessed === false ? "bg-amber-100 text-amber-800 hover:bg-amber-200" : ""}`}
+                                >
+                                  {msg.context_used ? 'Using book context' : 'No book context found'}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                {msg.context_used 
+                                  ? 'Quiz generated using content from the book' 
+                                  : isBookProcessed === false 
+                                    ? 'Book processing incomplete. The quiz is based on limited content'
+                                    : 'No relevant context found in the book'
+                                }
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
                         )}
                         {new Date(msg.timestamp).toLocaleTimeString()}
                       </div>
@@ -325,20 +451,33 @@ const AIAssistantPanel = () => {
           </CardContent>
           
           <div className="p-4 border-t">
-            <Button 
-              onClick={handleGenerateQuiz} 
-              disabled={isGeneratingQuiz || !currentBookId} 
-              className="w-full"
-            >
-              {isGeneratingQuiz ? (
-                <>
-                  <RefreshCcw className="h-4 w-4 mr-2 animate-spin" />
-                  Generating quiz...
-                </>
-              ) : (
-                <>Generate Quiz from {searchScope === 'page' ? 'Current Page' : 'Entire Book'}</>
-              )}
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    onClick={handleGenerateQuiz} 
+                    disabled={isGeneratingQuiz || !currentBookId} 
+                    className="w-full"
+                  >
+                    {isGeneratingQuiz ? (
+                      <>
+                        <RefreshCcw className="h-4 w-4 mr-2 animate-spin" />
+                        Generating quiz...
+                      </>
+                    ) : (
+                      <>Generate Quiz from {searchScope === 'page' ? 'Current Page' : 'Entire Book'}</>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {searchScope === 'page'
+                    ? "Generate quiz questions based on the current page"
+                    : isBookProcessed === false 
+                      ? "Book content may not be fully processed yet, limiting quiz coverage"
+                      : "Generate quiz questions based on the entire book"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </TabsContent>
       </Tabs>

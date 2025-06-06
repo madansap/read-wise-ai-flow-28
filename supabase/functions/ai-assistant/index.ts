@@ -1,6 +1,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.22.0";
+import * as pdfjs from "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.5.141/+esm";
 
 // CORS headers
 const corsHeaders = {
@@ -23,7 +24,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 // Function to find relevant chunks for a query using vector similarity search
 async function findRelevantChunks(query: string, bookId: string, pageNumber?: number, searchScope: 'page' | 'book' = 'book') {
-  console.log(`Finding relevant chunks for query: ${query} `);
+  console.log(`Finding relevant chunks for query: ${query} with scope: ${searchScope}`);
   
   try {
     // If search scope is set to just the current page and we have a page number
@@ -279,6 +280,265 @@ async function generateQuiz(content: string, relevantChunks: any[]) {
   return await callGeminiAPI(prompt, context, systemPrompt);
 }
 
+// New function to extract text from PDF
+async function extractPdfText(storage, filePath) {
+  try {
+    console.log(`Extracting text from PDF: ${filePath}`);
+    
+    // Download PDF from storage
+    const { data: fileData, error: fileError } = await storage
+      .from('books')
+      .download(filePath);
+      
+    if (fileError) {
+      console.error(`Error downloading PDF: ${fileError.message}`);
+      throw fileError;
+    }
+    
+    // Load PDF.js
+    await pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.5.141/build/pdf.worker.min.js";
+    
+    // Convert the downloaded file to ArrayBuffer
+    const arrayBuffer = await fileData.arrayBuffer();
+    
+    // Load the PDF document
+    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    console.log(`PDF loaded. Total pages: ${pdf.numPages}`);
+    
+    const pagesData = [];
+    
+    // Extract text from each page
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      try {
+        console.log(`Extracting text from page ${pageNum}/${pdf.numPages}`);
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str).join(' ');
+        
+        pagesData.push({
+          page_number: pageNum,
+          content: pageText
+        });
+        
+        // Update processing status for better user feedback
+        if (pageNum % 10 === 0 || pageNum === pdf.numPages) {
+          await updateBookProcessingStatus(`Processing ${pageNum} of ${pdf.numPages} pages`);
+        }
+      } catch (pageError) {
+        console.error(`Error extracting text from page ${pageNum}: ${pageError.message}`);
+        // Continue with next page even if this one fails
+      }
+    }
+    
+    return {
+      total_pages: pdf.numPages,
+      pages: pagesData
+    };
+  } catch (error) {
+    console.error(`Error in extractPdfText: ${error.message}`);
+    throw new Error(`PDF text extraction failed: ${error.message}`);
+  }
+  
+  // Helper function to update processing status
+  async function updateBookProcessingStatus(status, bookId) {
+    try {
+      const { error } = await supabase
+        .from('books')
+        .update({ processing_status: status })
+        .eq('id', bookId);
+        
+      if (error) {
+        console.error(`Error updating processing status: ${error.message}`);
+      }
+    } catch (error) {
+      console.error(`Error in updateBookProcessingStatus: ${error.message}`);
+    }
+  }
+}
+
+// Function to chunk text into smaller pieces
+function chunkText(text, maxChunkSize = 1000) {
+  if (!text || text.length <= maxChunkSize) {
+    return [text];
+  }
+  
+  // Split by paragraphs first
+  const paragraphs = text.split(/\n+/).filter(Boolean);
+  const chunks = [];
+  let currentChunk = '';
+  
+  for (const paragraph of paragraphs) {
+    // If paragraph itself exceeds max size, split it by sentences
+    if (paragraph.length > maxChunkSize) {
+      const sentences = paragraph.split(/(?<=[.!?])\s+/);
+      
+      for (const sentence of sentences) {
+        if ((currentChunk + sentence).length <= maxChunkSize) {
+          currentChunk += (currentChunk ? ' ' : '') + sentence;
+        } else {
+          if (currentChunk) {
+            chunks.push(currentChunk);
+            currentChunk = sentence;
+          } else {
+            // Handle very long sentences by hard splitting
+            if (sentence.length > maxChunkSize) {
+              const words = sentence.split(/\s+/);
+              let wordChunk = '';
+              
+              for (const word of words) {
+                if ((wordChunk + ' ' + word).length <= maxChunkSize) {
+                  wordChunk += (wordChunk ? ' ' : '') + word;
+                } else {
+                  if (wordChunk) {
+                    chunks.push(wordChunk);
+                    wordChunk = word;
+                  } else {
+                    // Extreme case: single word exceeds limit, split by characters
+                    for (let i = 0; i < word.length; i += maxChunkSize) {
+                      chunks.push(word.slice(i, i + maxChunkSize));
+                    }
+                    wordChunk = '';
+                  }
+                }
+              }
+              
+              if (wordChunk) {
+                chunks.push(wordChunk);
+              }
+            } else {
+              chunks.push(sentence);
+            }
+          }
+        }
+      }
+    } else if ((currentChunk + paragraph).length <= maxChunkSize) {
+      currentChunk += (currentChunk ? '\n' : '') + paragraph;
+    } else {
+      if (currentChunk) {
+        chunks.push(currentChunk);
+      }
+      currentChunk = paragraph;
+    }
+  }
+  
+  if (currentChunk) {
+    chunks.push(currentChunk);
+  }
+  
+  return chunks;
+}
+
+// Function to process a book's PDF and store text + embeddings
+async function processBook(bookId, userId, filePath) {
+  try {
+    console.log(`Starting to process book: ${bookId} for user: ${userId} at path: ${filePath}`);
+    
+    // Update book status to "Processing"
+    await supabase
+      .from('books')
+      .update({ 
+        is_processed: false,
+        processing_status: 'Processing started'
+      })
+      .eq('id', bookId);
+    
+    // Step 1: Extract text from PDF
+    const pdfData = await extractPdfText(supabase.storage, filePath);
+    console.log(`Extracted ${pdfData.pages.length} pages from PDF`);
+    
+    // Step 2: Store each page in the book_pages table
+    for (let i = 0; i < pdfData.pages.length; i++) {
+      const page = pdfData.pages[i];
+      
+      // Update status every 10 pages
+      if (i % 10 === 0 || i === pdfData.pages.length - 1) {
+        await supabase
+          .from('books')
+          .update({ processing_status: `Processing page ${i+1} of ${pdfData.pages.length}` })
+          .eq('id', bookId);
+      }
+      
+      // Insert page data
+      const { data: pageData, error: pageError } = await supabase
+        .from('book_pages')
+        .insert({
+          book_id: bookId,
+          user_id: userId,
+          page_number: page.page_number,
+          content: page.content
+        })
+        .select('id')
+        .single();
+        
+      if (pageError) {
+        console.error(`Error inserting page ${page.page_number}: ${pageError.message}`);
+        continue;
+      }
+      
+      // Step 3: Chunk the page text and create embeddings
+      const pageId = pageData.id;
+      const chunks = chunkText(page.content);
+      
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        const chunk = chunks[chunkIndex];
+        if (!chunk || chunk.trim().length < 10) continue; // Skip empty or very small chunks
+        
+        try {
+          // Generate embedding for this chunk
+          const embedding = await generateEmbedding(chunk);
+          if (!embedding) {
+            console.error(`Failed to generate embedding for chunk ${chunkIndex} of page ${page.page_number}`);
+            continue;
+          }
+          
+          // Insert chunk with its embedding into book_chunks table
+          const { error: chunkError } = await supabase
+            .from('book_chunks')
+            .insert({
+              book_id: bookId,
+              page_id: pageId,
+              chunk_index: chunkIndex,
+              content: chunk,
+              embedding: embedding
+            });
+            
+          if (chunkError) {
+            console.error(`Error inserting chunk ${chunkIndex} for page ${page.page_number}: ${chunkError.message}`);
+          }
+        } catch (chunkError) {
+          console.error(`Error processing chunk ${chunkIndex} of page ${page.page_number}: ${chunkError.message}`);
+        }
+      }
+    }
+    
+    // Step 4: Update the book with total pages and processing status
+    await supabase
+      .from('books')
+      .update({ 
+        total_pages: pdfData.pages.length,
+        is_processed: true,
+        processing_status: 'Complete'
+      })
+      .eq('id', bookId);
+      
+    console.log(`Successfully processed book ${bookId} with ${pdfData.pages.length} pages`);
+    return { success: true, pages: pdfData.pages.length };
+  } catch (error) {
+    console.error(`Error in processBook: ${error.message}`);
+    
+    // Update book status to reflect the error
+    await supabase
+      .from('books')
+      .update({ 
+        is_processed: false,
+        processing_status: `Error: ${error.message}`
+      })
+      .eq('id', bookId);
+      
+    return { success: false, error: error.message };
+  }
+}
+
 serve(async (req) => {
   // Handle CORS preflight request
   if (req.method === "OPTIONS") {
@@ -287,7 +547,6 @@ serve(async (req) => {
 
   try {
     console.log("Function triggered at: " + new Date().toISOString());
-    console.log("Request headers:", req.headers);
     
     const reqBody = await req.text();
     console.log("Raw request body:", reqBody);
@@ -333,6 +592,33 @@ serve(async (req) => {
       bookContent,
       searchScope
     });
+    
+    // Handle PDF text extraction endpoint
+    if (endpoint === "extract-pdf-text") {
+      if (!bookId || !userId || !filePath) {
+        throw new Error("Missing required parameters for PDF extraction");
+      }
+      
+      try {
+        const result = await processBook(bookId, userId, filePath);
+        return new Response(
+          JSON.stringify(result),
+          { 
+            status: 200, 
+            headers: { "Content-Type": "application/json", ...corsHeaders } 
+          }
+        );
+      } catch (error) {
+        console.error("Error processing PDF:", error);
+        return new Response(
+          JSON.stringify({ success: false, error: error.message || "Error processing PDF" }),
+          { 
+            status: 500, 
+            headers: { "Content-Type": "application/json", ...corsHeaders } 
+          }
+        );
+      }
+    }
     
     // Handle chat/quiz modes
     if (mode === 'chat' || mode === 'quiz') {
