@@ -63,6 +63,28 @@ const AIAssistantPanel = () => {
     checkBookProcessingStatus();
   }, [currentBookId]);
 
+  // Function to toggle search scope that can be passed to child components
+  const toggleSearchScope = () => {
+    const newScope = searchScope === 'page' ? 'book' : 'page';
+    setSearchScope(newScope);
+    console.log(`Search scope switched to: ${newScope}`);
+    
+    // Show toast to confirm search scope change
+    toast({
+      title: `Context mode: ${newScope === 'page' ? 'Current Page Only' : 'Entire Book'}`,
+      description: `AI will now use ${newScope === 'page' ? 'only the current page' : 'the entire book'} for context.`,
+    });
+    
+    // If switching to book scope but book isn't processed, warn the user
+    if (newScope === 'book' && isBookProcessed === false) {
+      toast({
+        title: "Book not fully processed",
+        description: "The book hasn't been fully processed yet, so the AI's knowledge of the entire book may be limited.",
+        variant: "default",
+      });
+    }
+  };
+
   return (
     <Card className="h-full flex flex-col">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
@@ -82,6 +104,8 @@ const AIAssistantPanel = () => {
             currentPage={currentPage}
             currentPageText={currentPageText}
             isBookProcessed={isBookProcessed}
+            searchScope={searchScope}
+            toggleSearchScope={toggleSearchScope}
           />
         </TabsContent>
 

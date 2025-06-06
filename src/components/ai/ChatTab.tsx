@@ -20,6 +20,8 @@ interface ChatTabProps {
   currentPage: number;
   currentPageText: string | null;
   isBookProcessed: boolean | null;
+  searchScope: 'page' | 'book';
+  toggleSearchScope: () => void;
 }
 
 export const ChatTab: React.FC<ChatTabProps> = ({
@@ -29,11 +31,12 @@ export const ChatTab: React.FC<ChatTabProps> = ({
   currentBookId,
   currentPage,
   currentPageText,
-  isBookProcessed
+  isBookProcessed,
+  searchScope,
+  toggleSearchScope
 }) => {
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [searchScope, setSearchScope] = useState<'page' | 'book'>('book');
 
   const handleAskQuestion = async () => {
     if (!message.trim() || isSubmitting) return;
@@ -114,28 +117,6 @@ export const ChatTab: React.FC<ChatTabProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     handleAskQuestion();
-  };
-
-  // Toggle search scope function
-  const toggleSearchScope = () => {
-    const newScope = searchScope === 'page' ? 'book' : 'page';
-    setSearchScope(newScope);
-    console.log(`Search scope switched to: ${newScope}`);
-    
-    // Show toast to confirm search scope change
-    toast({
-      title: `Context mode: ${newScope === 'page' ? 'Current Page Only' : 'Entire Book'}`,
-      description: `AI will now use ${newScope === 'page' ? 'only the current page' : 'the entire book'} for context.`,
-    });
-    
-    // If switching to book scope but book isn't processed, warn the user
-    if (newScope === 'book' && isBookProcessed === false) {
-      toast({
-        title: "Book not fully processed",
-        description: "The book hasn't been fully processed yet, so the AI's knowledge of the entire book may be limited.",
-        variant: "default",
-      });
-    }
   };
 
   return (
