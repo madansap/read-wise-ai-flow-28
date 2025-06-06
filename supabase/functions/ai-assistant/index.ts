@@ -296,7 +296,8 @@ async function extractPdfText(storage, filePath) {
     }
     
     // Load PDF.js
-    await pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.5.141/build/pdf.worker.min.js";
+    // FIX: Remove 'await' from assignment statement - this was causing the deployment error
+    pdfjs.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.5.141/build/pdf.worker.min.js";
     
     // Convert the downloaded file to ArrayBuffer
     const arrayBuffer = await fileData.arrayBuffer();
@@ -322,7 +323,7 @@ async function extractPdfText(storage, filePath) {
         
         // Update processing status for better user feedback
         if (pageNum % 10 === 0 || pageNum === pdf.numPages) {
-          await updateBookProcessingStatus(`Processing ${pageNum} of ${pdf.numPages} pages`);
+          await updateBookProcessingStatus(`Processing ${pageNum} of ${pdf.numPages} pages`, bookId);
         }
       } catch (pageError) {
         console.error(`Error extracting text from page ${pageNum}: ${pageError.message}`);
@@ -338,21 +339,26 @@ async function extractPdfText(storage, filePath) {
     console.error(`Error in extractPdfText: ${error.message}`);
     throw new Error(`PDF text extraction failed: ${error.message}`);
   }
-  
-  // Helper function to update processing status
-  async function updateBookProcessingStatus(status, bookId) {
-    try {
-      const { error } = await supabase
-        .from('books')
-        .update({ processing_status: status })
-        .eq('id', bookId);
-        
-      if (error) {
-        console.error(`Error updating processing status: ${error.message}`);
-      }
-    } catch (error) {
-      console.error(`Error in updateBookProcessingStatus: ${error.message}`);
+}
+
+// Helper function to update processing status
+async function updateBookProcessingStatus(status, bookId) {
+  try {
+    if (!bookId) {
+      console.error("Book ID is required to update processing status");
+      return;
     }
+    
+    const { error } = await supabase
+      .from('books')
+      .update({ processing_status: status })
+      .eq('id', bookId);
+      
+    if (error) {
+      console.error(`Error updating processing status: ${error.message}`);
+    }
+  } catch (error) {
+    console.error(`Error in updateBookProcessingStatus: ${error.message}`);
   }
 }
 

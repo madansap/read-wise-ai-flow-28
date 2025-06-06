@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +21,12 @@ interface Message {
   timestamp: string;
   context_used?: boolean; // Optional field to track if context was used
 }
+
+const variantOptions = {
+  success: "default",
+  error: "destructive",
+  info: "default", 
+} as const;
 
 const AIAssistantPanel = () => {
   const [message, setMessage] = useState('');
