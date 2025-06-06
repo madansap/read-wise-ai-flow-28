@@ -26,6 +26,7 @@ const variantOptions = {
   success: "default",
   error: "destructive",
   info: "default", 
+  warning: "default" // Add warning variant mapping to a valid type
 } as const;
 
 const AIAssistantPanel = () => {
@@ -65,7 +66,7 @@ const AIAssistantPanel = () => {
             title: "Book not fully processed",
             description: "AI may have limited knowledge of the book content. Processing status: " + 
                         (data.processing_status || "Not processed"),
-            variant: "warning",
+            variant: "default", // Changed from "warning" to "default"
           });
         }
       } catch (error) {
@@ -283,6 +284,7 @@ const AIAssistantPanel = () => {
     handleAskQuestion();
   };
 
+  // Toggle search scope function
   const toggleSearchScope = () => {
     const newScope = searchScope === 'page' ? 'book' : 'page';
     setSearchScope(newScope);
@@ -299,7 +301,7 @@ const AIAssistantPanel = () => {
       toast({
         title: "Book not fully processed",
         description: "The book hasn't been fully processed yet, so the AI's knowledge of the entire book may be limited.",
-        variant: "warning",
+        variant: "default", // Changed from "warning" to "default"
       });
     }
   };
